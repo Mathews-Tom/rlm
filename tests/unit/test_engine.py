@@ -41,7 +41,7 @@ def test_recurse_decision() -> None:
             if call_count["planner"] == 1:
                 # First call: RECURSE with 2 sub-tasks
                 return {
-                    "content": '{"decision": "RECURSE", "thoughts": "Complex", "sub_tasks": ["task1", "task2"]}',
+                    "content": '{"decision": "RECURSE", "thoughts": "Complex", "sub_tasks": [{"description": "task1"}, {"description": "task2"}]}',
                     "metadata": {},
                 }
             else:
@@ -69,7 +69,7 @@ def test_max_depth_enforcement() -> None:
 
     def always_recurse(inputs: list[Input], context: dict) -> Output:
         return {
-            "content": '{"decision": "RECURSE", "thoughts": "Always recurse", "sub_tasks": ["infinite"]}',
+            "content": '{"decision": "RECURSE", "thoughts": "Always recurse", "sub_tasks": [{"description": "infinite"}]}',
             "metadata": {},
         }
 
@@ -91,7 +91,7 @@ def test_max_steps_enforcement() -> None:
             # Create sub-tasks only if under step limit
             if call_count["count"] <= 2:
                 return {
-                    "content": '{"decision": "RECURSE", "thoughts": "Wide", "sub_tasks": ["t1","t2","t3","t4","t5"]}',
+                    "content": '{"decision": "RECURSE", "thoughts": "Wide", "sub_tasks": [{"description": "t1"},{"description": "t2"},{"description": "t3"},{"description": "t4"},{"description": "t5"}]}',
                     "metadata": {},
                 }
             else:
@@ -166,7 +166,7 @@ def test_context_depth_tracking() -> None:
             call_count["planner"] += 1
             if call_count["planner"] == 1:
                 return {
-                    "content": '{"decision": "RECURSE", "thoughts": "Recurse", "sub_tasks": ["task1"]}',
+                    "content": '{"decision": "RECURSE", "thoughts": "Recurse", "sub_tasks": [{"description": "task1"}]}',
                     "metadata": {},
                 }
             else:
@@ -215,7 +215,7 @@ def test_synthesis_with_multiple_results() -> None:
             call_count["planner"] += 1
             if call_count["planner"] == 1:
                 return {
-                    "content": '{"decision": "RECURSE", "thoughts": "Complex", "sub_tasks": ["task1", "task2", "task3"]}',
+                    "content": '{"decision": "RECURSE", "thoughts": "Complex", "sub_tasks": [{"description": "task1"}, {"description": "task2"}, {"description": "task3"}]}',
                     "metadata": {},
                 }
             else:

@@ -10,54 +10,89 @@ from rlm.exceptions import (
     RecursionDepthError,
 )
 from rlm.memory import RLMContext, SharedMemory
-from rlm.types import Input, LLMCaller, Output
+from rlm.prompts import PLANNER_SYSTEM_PROMPT, SYNTHESIZER_SYSTEM_PROMPT
+from rlm.types import Input, LLMCaller, Output, SubTask
 from rlm.utils import safe_parse_json, validate_planner_decision
 
 
 class RecursiveEngine:
-    """Core recursive execution engine for task decomposition.
+    """Core recursive execution engine with multi-agent routing.
 
     Manages the complete lifecycle of recursive task execution:
-    - Decides strategy (execute vs recurse)
+    - Decides strategy (execute vs recurse) using planner agent
+    - Routes sub-tasks to specialized agents based on assignments
     - Enforces depth and step limits
     - Manages RLMContext state
     - Synthesizes results from child agents
 
-    Example:
+    Example (Single-agent mode):
         >>> def my_llm(inputs, context):
         ...     # Your LLM wrapper here
         ...     return {"content": "result", "metadata": {}}
         >>> engine = RecursiveEngine(llm=my_llm, max_depth=3)
         >>> result = engine.solve("Write a marketing plan")
         >>> print(result['content'])
+
+    Example (Multi-agent mode):
+        >>> agents = {
+        ...     "planner": planner_llm,
+        ...     "researcher": researcher_llm,
+        ...     "writer": writer_llm,
+        ... }
+        >>> engine = RecursiveEngine(
+        ...     llm=planner_llm,  # Default/fallback
+        ...     agents=agents,
+        ...     router_model="planner",
+        ...     max_depth=3,
+        ... )
+        >>> result = engine.solve("Research and write a blog post")
     """
 
     def __init__(
         self,
         llm: LLMCaller,
+        agents: dict[str, LLMCaller] | None = None,
+        router_model: str = "planner",
         max_depth: int = 3,
         max_steps: int = 100,
         verbose: bool = False,
     ) -> None:
-        """Initialize recursive engine.
+        """Initialize recursive engine with optional multi-agent support.
 
         Args:
-            llm: Backend LLM caller (must match LLMCaller protocol)
+            llm: Default/fallback LLM caller (must match LLMCaller protocol)
+            agents: Optional registry of named agents for multi-agent routing
+                Format: {"agent_name": agent_llm_caller, ...}
+                If None, runs in single-agent mode (backward compatible)
+            router_model: Name of agent to use for planning decisions
+                Must exist in agents registry if agents is provided
+                Default: "planner"
             max_depth: Maximum recursion depth (default 3)
                 Prevents infinite recursion by limiting tree depth.
             max_steps: Maximum total steps across all levels (default 100)
                 Prevents runaway execution in wide trees.
             verbose: Enable debug logging (default False)
-                Logs planner decisions, recursion steps, etc.
+                Logs planner decisions, agent routing, recursion steps
 
         Raises:
             TypeError: If llm does not match LLMCaller protocol
+            ValueError: If router_model not in agents registry
         """
-        self.llm = llm
+        self.llm = llm  # Default/fallback LLM
+        self.agents = agents.copy() if agents else {}  # Agent registry (copy for immutability)
+        self.router_model = router_model
         self.max_depth = max_depth
         self.max_steps = max_steps
         self.verbose = verbose
         self._step_count = 0
+        self._current_subtasks: list[SubTask] = []
+
+        # Validate router_model exists if using multi-agent mode
+        if self.agents and self.router_model not in self.agents:
+            raise ValueError(
+                f"router_model '{self.router_model}' not found in agents registry. "
+                f"Available agents: {list(self.agents.keys())}"
+            )
 
     def solve(
         self, task: str, context: RLMContext | None = None
@@ -99,6 +134,7 @@ class RecursiveEngine:
                 depth=0,
                 breadcrumbs=(),
                 memory_ref=memory,
+                active_agent=None,
             )
 
         # Type narrowing: context is now guaranteed to be RLMContext
@@ -127,10 +163,40 @@ class RecursiveEngine:
         else:  # RECURSE
             return self._recurse(task, context)
 
+    def _get_agent(self, agent_name: str | None) -> LLMCaller:
+        """Get agent by name from registry with fallback.
+
+        Args:
+            agent_name: Name of agent to retrieve (None = use default)
+
+        Returns:
+            LLMCaller instance
+
+        Logs warning if agent not found and falls back to default
+        """
+        if agent_name is None or not self.agents:
+            # No agent specified or single-agent mode
+            return self.llm
+
+        if agent_name in self.agents:
+            return self.agents[agent_name]
+
+        # Agent not found - log warning and fall back
+        if self.verbose:
+            print(
+                f"⚠️  Agent '{agent_name}' not found in registry. "
+                f"Falling back to default LLM. "
+                f"Available agents: {list(self.agents.keys())}"
+            )
+
+        return self.llm
+
     def _decide_strategy(
         self, task: str, context: RLMContext
     ) -> str:
         """Decide whether to execute atomically or decompose.
+
+        Uses router agent for planning decisions in multi-agent mode.
 
         Args:
             task: Task description
@@ -149,6 +215,11 @@ class RecursiveEngine:
             {"role": "user", "content": task},
         ]
 
+        # Get router agent for planning
+        router_agent = self._get_agent(
+            self.router_model if self.agents else None
+        )
+
         # Retry logic for malformed JSON (up to 3 attempts)
         # Validation errors (schema issues) are raised immediately
         max_retries = 3
@@ -156,7 +227,7 @@ class RecursiveEngine:
 
         for attempt in range(max_retries):
             try:
-                result = self.llm(inputs, {"mode": "planner"})
+                result = router_agent(inputs, {"mode": "planner"})
             except Exception as e:
                 raise ExecutionError(f"LLM call failed for task: {task!r}") from e
 
@@ -210,7 +281,9 @@ class RecursiveEngine:
         return decision
 
     def _recurse(self, task: str, context: RLMContext) -> Output:
-        """Decompose task and recursively solve sub-tasks.
+        """Decompose task and recursively solve sub-tasks with agent routing.
+
+        Routes each sub-task to its assigned agent from the planning decision.
 
         Args:
             task: Task description
@@ -219,7 +292,7 @@ class RecursiveEngine:
         Returns:
             Synthesized output from all sub-tasks
         """
-        sub_tasks: list[str] = self._current_subtasks
+        sub_tasks: list[SubTask] = self._current_subtasks
 
         if self.verbose:
             print(
@@ -228,14 +301,25 @@ class RecursiveEngine:
 
         results: list[Output] = []
         for i, sub_task in enumerate(sub_tasks):
-            # Create child context
+            # Extract task description and assigned agent
+            task_desc: str = sub_task["description"]
+            assigned_agent: str | None = sub_task.get("assigned_agent")
+
+            if self.verbose and assigned_agent:
+                print(
+                    f"[Depth {context.depth}] Sub-task {i + 1} "
+                    f"routed to agent: {assigned_agent}"
+                )
+
+            # Create child context with agent assignment
             child_context = context.create_child(
                 task_id=uuid.uuid4().hex,
-                step_description=f"Sub-task {i + 1}: {sub_task[:50]}",
+                step_description=f"Sub-task {i + 1}: {task_desc[:50]}",
+                active_agent=assigned_agent,
             )
 
-            # Recursive call
-            result = self.solve(sub_task, child_context)
+            # Recursive call (solve will use _get_agent internally for execution)
+            result = self.solve(task_desc, child_context)
             results.append(result)
 
         # Synthesize results
@@ -243,6 +327,9 @@ class RecursiveEngine:
 
     def _execute_leaf(self, task: str, context: RLMContext) -> Output:
         """Execute task atomically (leaf node).
+
+        Uses the agent specified in context.active_agent for execution,
+        respecting multi-agent routing decisions.
 
         Args:
             task: Task description
@@ -265,8 +352,11 @@ class RecursiveEngine:
             {"role": "user", "content": task},
         ]
 
+        # Get the agent assigned to this task (respects routing)
+        agent = self._get_agent(context.active_agent)
+
         try:
-            result = self.llm(inputs, {"mode": "worker"})
+            result = agent(inputs, {"mode": "worker"})
         except Exception as e:
             raise ExecutionError(f"LLM call failed for task: {task!r}") from e
 
@@ -284,6 +374,8 @@ class RecursiveEngine:
         context: RLMContext,
     ) -> Output:
         """Synthesize results from sub-tasks into coherent output.
+
+        Uses router agent or default LLM for synthesis.
 
         Args:
             original_task: Original task description
@@ -305,15 +397,14 @@ class RecursiveEngine:
             for i, result in enumerate(results)
         )
 
-        synthesis_prompt = f"""You are synthesizing results from multiple sub-tasks.
+        synthesis_prompt = f"""{SYNTHESIZER_SYSTEM_PROMPT}
 
 Original task: {original_task}
 
 Sub-task results:
 {combined_results}
 
-Synthesize these results into a coherent, comprehensive answer to the original task.
-Ensure the answer is well-structured and addresses all aspects of the original task."""
+Synthesize these results into a coherent, comprehensive answer to the original task."""
 
         inputs: list[Input] = [
             {"role": "system", "content": synthesis_prompt},
@@ -323,8 +414,15 @@ Ensure the answer is well-structured and addresses all aspects of the original t
             },
         ]
 
+        # Use dedicated synthesizer agent if available, otherwise router agent
+        synthesizer_name = (
+            "synthesizer" if "synthesizer" in self.agents
+            else (self.router_model if self.agents else None)
+        )
+        synthesizer = self._get_agent(synthesizer_name)
+
         try:
-            result = self.llm(inputs, {"mode": "synthesizer"})
+            result = synthesizer(inputs, {"mode": "synthesizer"})
         except Exception as e:
             raise ExecutionError(
                 f"Synthesis failed for task: {original_task!r}"
@@ -336,41 +434,60 @@ Ensure the answer is well-structured and addresses all aspects of the original t
         result["metadata"]["breadcrumbs"] = context.breadcrumbs
         result["metadata"]["sub_results_count"] = len(results)
 
+        # Preserve child results for metadata extraction (cost tracking, etc.)
+        result["sub_results"] = results
+
         return result
 
     def _build_planner_prompt(
         self, task: str, context: RLMContext
     ) -> str:
-        """Build system prompt for planner.
+        """Build system prompt for planner with agent registry.
+
+        Uses PLANNER_SYSTEM_PROMPT template and injects available agents.
 
         Args:
             task: Task description
             context: Current execution context
 
         Returns:
-            System prompt for planner LLM
+            System prompt for planner LLM with agent information
         """
-        return f"""You are a task planning assistant. Analyze the task and decide whether to:
+        # Build agent descriptions
+        if self.agents:
+            available_agents = ", ".join(self.agents.keys())
+            # Generate agent descriptions (for now, just list names)
+            # TODO: Could enhance with agent capabilities/descriptions
+            agent_descriptions = "\n".join(
+                f"- {agent_name}: Specialized agent"
+                for agent_name in self.agents.keys()
+            )
+        else:
+            available_agents = "None (single-agent mode)"
+            agent_descriptions = "No specialized agents available."
 
-1. EXECUTE: Solve the task directly (simple, atomic task)
-2. RECURSE: Break down into independent sub-tasks (complex task requiring multiple steps)
+        # Format PLANNER_SYSTEM_PROMPT with agent info
+        prompt = PLANNER_SYSTEM_PROMPT.format(
+            available_agents=available_agents,
+            agent_descriptions=agent_descriptions,
+        )
 
-Task to analyze: {task}
+        # Append context-specific information
+        prompt += f"""
 
-Current depth: {context.depth}
-Max depth: {self.max_depth}
-Remaining depth: {self.max_depth - context.depth}
+**Current Context:**
+- Current depth: {context.depth}
+- Max depth: {self.max_depth}
+- Remaining depth: {self.max_depth - context.depth}
 
-Guidelines:
-- Prefer EXECUTE for simple, direct questions
-- Use RECURSE for complex tasks requiring multiple steps or domains
-- Each sub-task should be independent and focused
-- Aim for 2-4 sub-tasks when decomposing
-- If near max depth, prefer EXECUTE
+**Decision Criteria:**
+- EXECUTE if: Task is atomic, simple, or cannot be meaningfully decomposed
+- RECURSE if: Task is complex, has distinct sub-components, or benefits from parallel execution
 
-Respond with JSON:
-{{
-  "thoughts": "Your reasoning about task complexity",
-  "decision": "EXECUTE" or "RECURSE",
-  "sub_tasks": ["task 1", "task 2", ...]  // Required only if RECURSE
-}}"""
+**Quality Standards:**
+- Sub-tasks should be independent when possible (enables parallelization)
+- Each sub-task should have clear, actionable description
+- Decomposition should reduce overall complexity
+- Avoid over-decomposition (don't split atomic tasks)"""
+
+        return prompt
