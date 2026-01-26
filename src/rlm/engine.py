@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
-from rlm.memory import RLMContext, SharedMemory
-from rlm.types import (
+from rlm.exceptions import (
     ExecutionError,
-    Input,
-    LLMCaller,
+    InvalidJSONError,
     MaxStepsError,
-    Output,
     RecursionDepthError,
 )
+from rlm.memory import RLMContext, SharedMemory
+from rlm.types import Input, LLMCaller, Output
 from rlm.utils import safe_parse_json, validate_planner_decision
 
 
@@ -149,14 +149,50 @@ class RecursiveEngine:
             {"role": "user", "content": task},
         ]
 
-        try:
-            result = self.llm(inputs, {"mode": "planner"})
-        except Exception as e:
-            raise ExecutionError(f"LLM call failed for task: {task!r}") from e
+        # Retry logic for malformed JSON (up to 3 attempts)
+        # Validation errors (schema issues) are raised immediately
+        max_retries = 3
+        data: dict[str, Any] = {}  # Initialize to satisfy type checker
 
-        # Parse and validate decision
-        data = safe_parse_json(result["content"])
-        validate_planner_decision(data)
+        for attempt in range(max_retries):
+            try:
+                result = self.llm(inputs, {"mode": "planner"})
+            except Exception as e:
+                raise ExecutionError(f"LLM call failed for task: {task!r}") from e
+
+            # Try to parse JSON
+            try:
+                data = safe_parse_json(result["content"])
+            except InvalidJSONError as e:
+                # Malformed JSON - retry with feedback
+                if self.verbose:
+                    print(
+                        f"[Depth {context.depth}] Malformed JSON on attempt {attempt + 1}/{max_retries}: {e}"
+                    )
+                if attempt < max_retries - 1:
+                    # Add error feedback to inputs for retry
+                    inputs.append(
+                        {
+                            "role": "assistant",
+                            "content": result["content"],
+                        }
+                    )
+                    inputs.append(
+                        {
+                            "role": "user",
+                            "content": f"Error parsing JSON: {e}. Please provide valid JSON.",
+                        }
+                    )
+                    continue  # Retry
+                else:
+                    # Final attempt failed - wrap in ExecutionError
+                    raise ExecutionError(
+                        f"Failed to get valid JSON after {max_retries} attempts for task: {task!r}"
+                    ) from e
+
+            # Validate decision schema (no retry for validation errors)
+            validate_planner_decision(data)
+            break  # Success
 
         decision: str = data["decision"]
 

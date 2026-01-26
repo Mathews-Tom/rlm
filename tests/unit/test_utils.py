@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from rlm.types import InvalidJSONError
+from rlm.exceptions import InvalidJSONError
 from rlm.utils import safe_parse_json, validate_planner_decision
 
 

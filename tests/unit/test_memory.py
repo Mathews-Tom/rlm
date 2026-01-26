@@ -130,3 +130,35 @@ def test_context_parent_unchanged() -> None:
     # Child should have updated values
     assert child.depth == 1
     assert child.breadcrumbs == ("Sub-task",)
+
+
+def test_large_document_offloading() -> None:
+    """Test memory offloading with large documents (50k+ characters).
+
+    Verifies that SharedMemory can handle large content without issues,
+    simulating variable offloading to prevent context overflow.
+    """
+    memory = SharedMemory()
+
+    # Create 50k+ character document
+    large_content = "x" * 50_000 + "\n" + "Large document test content" * 100
+
+    # Store large document
+    ref_id = memory.store(large_content)
+
+    # Verify reference ID format
+    assert ref_id.startswith("ref::")
+    assert len(ref_id) == 13
+
+    # Verify full content can be retrieved
+    retrieved = memory.resolve(ref_id)
+    assert retrieved == large_content
+    assert len(retrieved) > 50_000
+
+    # Verify multiple large documents can coexist
+    large_content2 = "y" * 60_000
+    ref_id2 = memory.store(large_content2)
+
+    assert ref_id != ref_id2
+    assert memory.resolve(ref_id) == large_content
+    assert memory.resolve(ref_id2) == large_content2

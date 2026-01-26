@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+import logging
 import os
 
 import pytest
 
-# Skip all tests if no API key
-pytestmark = pytest.mark.skipif(
-    not os.getenv("OPENAI_API_KEY"),
-    reason="Requires OPENAI_API_KEY environment variable",
+# Configure logging for integration tests
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(levelname)s] %(message)s",
 )
+logger = logging.getLogger(__name__)
+
+# Skip all tests if no API key
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not os.getenv("OPENAI_API_KEY"),
+        reason="Requires OPENAI_API_KEY environment variable",
+    ),
+]
 
 
 @pytest.fixture
@@ -59,9 +70,16 @@ def openai_engine():
 
 def test_simple_execution(openai_engine):
     """Test simple task execution with real OpenAI API."""
+    logger.info("=" * 60)
+    logger.info("TEST: Simple Execution (EXECUTE decision)")
+    logger.info("=" * 60)
+
     result = openai_engine.solve(
         "What is 2 + 2? Respond in one sentence."
     )
+
+    logger.info(f"Result: {result['content']}")
+    logger.info(f"Metadata: {result.get('metadata', {})}")
 
     assert "content" in result
     assert len(result["content"]) > 0
@@ -70,9 +88,17 @@ def test_simple_execution(openai_engine):
 
 def test_recursive_task(openai_engine):
     """Test recursive task decomposition with real API."""
+    logger.info("=" * 60)
+    logger.info("TEST: Recursive Task (RECURSE with sub-tasks)")
+    logger.info("=" * 60)
+
     result = openai_engine.solve(
         "Write a 3-sentence summary of the benefits of recursion in programming."
     )
+
+    logger.info(f"Result length: {len(result['content'])} chars")
+    logger.info(f"Result: {result['content'][:200]}...")
+    logger.info(f"Metadata: {result.get('metadata', {})}")
 
     assert "content" in result
     assert len(result["content"]) > 100
@@ -83,8 +109,77 @@ def test_recursive_task(openai_engine):
 
 def test_metadata_tracking(openai_engine):
     """Test that metadata is tracked correctly."""
+    logger.info("=" * 60)
+    logger.info("TEST: Metadata Tracking")
+    logger.info("=" * 60)
+
     result = openai_engine.solve("Explain Python in one sentence.")
+
+    logger.info(f"Result: {result['content']}")
+    logger.info(f"Metadata keys: {list(result.get('metadata', {}).keys())}")
+    logger.info(f"Full metadata: {result.get('metadata', {})}")
 
     assert "metadata" in result
     assert "depth" in result["metadata"]
     assert "task_id" in result["metadata"]
+
+
+def test_depth_limit_enforcement(openai_engine):
+    """Test that depth limit is enforced with real API.
+
+    Creates a task that would naturally recurse deeply,
+    then verifies the engine stops at max_depth.
+    """
+    from rlm.exceptions import RecursionDepthError
+
+    logger.info("=" * 60)
+    logger.info("TEST: Depth Limit Enforcement")
+    logger.info("=" * 60)
+
+    # Task that encourages deep recursion
+    task = (
+        "Break this down into subtasks recursively: "
+        "Plan a complete software project with architecture, "
+        "implementation, testing, and deployment phases. "
+        "Break each phase into detailed sub-phases."
+    )
+
+    logger.info(f"Task: {task}")
+    logger.info("Expecting RecursionDepthError...")
+
+    # Engine has max_depth=3, so depth 3+ should fail
+    with pytest.raises(RecursionDepthError) as exc_info:
+        openai_engine.solve(task)
+
+    logger.info(f"Caught expected error: {exc_info.value}")
+    assert "max_depth=3" in str(exc_info.value)
+
+
+def test_large_document_offloading(openai_engine):
+    """Test variable offloading with large documents using real API.
+
+    Verifies that the engine can handle tasks involving large content
+    by offloading to SharedMemory.
+    """
+    logger.info("=" * 60)
+    logger.info("TEST: Large Document Offloading")
+    logger.info("=" * 60)
+
+    # Create a task with large input (10k+ characters)
+    large_document = "Technical documentation: " + "x" * 10_000
+
+    task = f"Summarize this document in one sentence: {large_document}"
+
+    logger.info(f"Task size: {len(task)} characters")
+    logger.info("Processing large document...")
+
+    result = openai_engine.solve(task)
+
+    logger.info(f"Result length: {len(result['content'])} chars")
+    logger.info(f"Result: {result['content']}")
+    logger.info(f"Compression ratio: {len(task)}:{len(result['content'])}")
+
+    assert "content" in result
+    assert len(result["content"]) > 0
+    # Summary should be much shorter than input
+    assert len(result["content"]) < 1000

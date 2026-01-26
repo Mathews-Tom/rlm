@@ -4,7 +4,8 @@ import json
 import re
 from typing import Any
 
-from rlm.types import InvalidJSONError
+from rlm.exceptions import InvalidJSONError
+from rlm.types import TraceObject
 
 
 def safe_parse_json(content: str) -> dict[str, Any]:
@@ -73,3 +74,51 @@ def validate_planner_decision(data: dict[str, Any]) -> None:
 
         if not data["sub_tasks"]:
             raise InvalidJSONError("Field 'sub_tasks' cannot be empty for RECURSE")
+
+
+def create_trace(
+    trace_id: str,
+    root_id: str,
+    depth: int,
+    input: str,
+    output: str,
+    parent_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> TraceObject:
+    """Create MIMIR-compatible execution trace.
+
+    Helper function to construct TraceObject with proper structure.
+    Simplifies trace creation in engine code.
+
+    Args:
+        trace_id: Unique identifier for this trace
+        root_id: Root task identifier
+        depth: Recursion depth level
+        input: Input task/prompt
+        output: Output/result
+        parent_id: Parent task identifier (None for root)
+        metadata: Additional trace metadata (default: empty dict)
+
+    Returns:
+        TraceObject with all required fields
+
+    Example:
+        >>> trace = create_trace(
+        ...     trace_id="abc123",
+        ...     root_id="abc123",
+        ...     depth=0,
+        ...     input="Analyze data",
+        ...     output="Analysis complete",
+        ... )
+        >>> trace["trace_id"]
+        'abc123'
+    """
+    return TraceObject(
+        trace_id=trace_id,
+        parent_id=parent_id,
+        root_id=root_id,
+        depth=depth,
+        input=input,
+        output=output,
+        metadata=metadata or {},
+    )

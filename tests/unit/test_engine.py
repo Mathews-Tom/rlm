@@ -3,14 +3,13 @@ from __future__ import annotations
 import pytest
 
 from rlm.engine import RecursiveEngine
-from rlm.types import (
+from rlm.exceptions import (
     ExecutionError,
-    Input,
     InvalidJSONError,
     MaxStepsError,
-    Output,
     RecursionDepthError,
 )
+from rlm.types import Input, Output
 
 
 def test_execute_decision() -> None:
@@ -111,15 +110,23 @@ def test_max_steps_enforcement() -> None:
 
 
 def test_invalid_json_handling() -> None:
-    """Test error handling for malformed JSON."""
+    """Test error handling for malformed JSON.
+
+    After 3 retry attempts with malformed JSON, should raise ExecutionError
+    (wrapping the underlying InvalidJSONError).
+    """
 
     def bad_json_llm(inputs: list[Input], context: dict) -> Output:
         return {"content": "Not JSON {{", "metadata": {}}
 
     engine = RecursiveEngine(llm=bad_json_llm)
 
-    with pytest.raises(InvalidJSONError):
+    with pytest.raises(ExecutionError) as exc_info:
         engine.solve("Test task")
+
+    # Verify it's wrapping InvalidJSONError
+    assert "Failed to get valid JSON after 3 attempts" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, InvalidJSONError)
 
 
 def test_missing_decision_field() -> None:
