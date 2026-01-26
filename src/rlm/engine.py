@@ -101,6 +101,9 @@ class RecursiveEngine:
                 memory_ref=memory,
             )
 
+        # Type narrowing: context is now guaranteed to be RLMContext
+        assert context is not None, "Context should be initialized"
+
         # 2. Enforce depth limit
         if context.depth >= self.max_depth:
             raise RecursionDepthError(
@@ -315,6 +318,8 @@ Ensure the answer is well-structured and addresses all aspects of the original t
 
 1. EXECUTE: Solve the task directly (simple, atomic task)
 2. RECURSE: Break down into independent sub-tasks (complex task requiring multiple steps)
+
+Task to analyze: {task}
 
 Current depth: {context.depth}
 Max depth: {self.max_depth}

@@ -25,7 +25,10 @@ def openai_engine():
     client = OpenAI()
 
     def openai_llm(inputs: list[Input], context: dict) -> Output:
-        messages = [
+        # Convert Input TypedDict to OpenAI message format
+        from typing import Any, cast
+
+        messages: list[dict[str, Any]] = [
             {"role": inp["role"], "content": inp["content"]} for inp in inputs
         ]
 
@@ -33,12 +36,12 @@ def openai_engine():
         if context.get("mode") == "planner":
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=messages,
+                messages=cast(Any, messages),  # Type cast for OpenAI SDK compatibility
                 response_format={"type": "json_object"},
             )
         else:
             response = client.chat.completions.create(
-                model="gpt-4o-mini", messages=messages
+                model="gpt-4o-mini", messages=cast(Any, messages)
             )
 
         return {

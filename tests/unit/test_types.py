@@ -23,10 +23,14 @@ def test_llm_caller_protocol() -> None:
     """Verify LLMCaller protocol compliance."""
 
     def my_llm(inputs: list[Input], context: dict) -> Output:
-        return {"content": "test response", "metadata": {}}
+        # Echo the inputs count in response to use the parameter
+        return {
+            "content": f"test response (processed {len(inputs)} inputs)",
+            "metadata": {"context_keys": len(context)},
+        }
 
     # Protocol check (type checker validates this)
     caller: LLMCaller = my_llm
-    result = caller([], {})
-    assert result["content"] == "test response"
+    result = caller([{"role": "user", "content": "test"}], {"key": "value"})
+    assert "test response" in result["content"]
     assert "metadata" in result
