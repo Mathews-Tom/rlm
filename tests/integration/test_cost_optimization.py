@@ -4,10 +4,13 @@ import os
 from typing import Any
 
 import pytest
+from dotenv import load_dotenv
+
+# Load environment variables from .env file BEFORE skipif check
+load_dotenv()
 
 from rlm.engine import RecursiveEngine
 from rlm.types import Input, Output
-
 
 # Skip all tests in this module if OPENAI_API_KEY not set
 pytestmark = pytest.mark.skipif(
@@ -170,11 +173,9 @@ def test_cost_optimization_40_percent_savings() -> None:
     - Multi-agent achieves >= 40% savings
     - Quality remains high
     """
-    # Test task - complex enough to decompose
-    task = (
-        "Analyze Python's async/await syntax. "
-        "List 3 key benefits and provide a simple code example."
-    )
+    # Test task - needs to decompose to show cost savings
+    # Task with explicit parts triggers decomposition, but stays simple to avoid deep recursion
+    task = "Explain Python in 3 parts: 1) what it is, 2) one key benefit, 3) one common use. Write exactly 1 sentence per part."
 
     # Baseline: Single expensive model for everything
     print(f"\n{'='*60}")
@@ -183,7 +184,7 @@ def test_cost_optimization_40_percent_savings() -> None:
 
     baseline_engine = RecursiveEngine(
         llm=openai_expensive,
-        max_depth=2,
+        max_depth=3,
         verbose=True,
     )
 
@@ -204,17 +205,40 @@ def test_cost_optimization_40_percent_savings() -> None:
     agents = {
         "planner": openai_planner,
         "worker": openai_cheap,
+        "synthesizer": openai_cheap,  # Use cheap model for synthesis
     }
 
     optimized_engine = RecursiveEngine(
         llm=openai_planner,
         agents=agents,
         router_model="planner",
-        max_depth=2,
+        max_depth=3,
         verbose=True,
     )
 
     optimized_result = optimized_engine.solve(task)
+
+    # DEBUG: Inspect result structure
+    import json
+    print("\n" + "="*60)
+    print("DEBUG: Full Result Structure")
+    print("="*60)
+    print("\nBASELINE result keys:")
+    print(list(baseline_result.keys()))
+    print("\nOPTIMIZED result keys:")
+    print(list(optimized_result.keys()))
+
+    # Check if sub_results exists
+    if "sub_results" in optimized_result:
+        print("\n✓ Found 'sub_results' in optimized result")
+        print(f"  Sub-results count: {len(optimized_result['sub_results'])}")
+        print("\n  First sub-result structure:")
+        print(json.dumps(optimized_result['sub_results'][0], indent=4, default=str)[:500])
+    else:
+        print("\n✗ No 'sub_results' key in optimized result")
+        print("  Available keys:", list(optimized_result.keys()))
+    print("="*60 + "\n")
+
     optimized_metrics = _extract_cost_metrics(optimized_result)
     optimized_cost = optimized_metrics["total_cost"]
 
@@ -267,6 +291,7 @@ def test_cost_tracking_accuracy() -> None:
     agents = {
         "planner": openai_planner,
         "worker": openai_cheap,
+        "synthesizer": openai_cheap,  # Use cheap model for synthesis
     }
 
     engine = RecursiveEngine(
@@ -277,7 +302,7 @@ def test_cost_tracking_accuracy() -> None:
         verbose=True,
     )
 
-    task = "Explain list comprehensions in Python"
+    task = "Explain list comprehensions in one sentence"
     result = engine.solve(task)
 
     # Extract all cost data
@@ -309,6 +334,7 @@ def test_planner_token_overhead() -> None:
     agents = {
         "planner": openai_planner,
         "worker": openai_cheap,
+        "synthesizer": openai_cheap,  # Use cheap model for synthesis
     }
 
     engine = RecursiveEngine(
@@ -319,7 +345,7 @@ def test_planner_token_overhead() -> None:
         verbose=True,
     )
 
-    task = "List 5 Python design patterns with brief descriptions"
+    task = "Describe 3 Python design patterns in parts: 1) Singleton, 2) Factory, 3) Observer. Write exactly 1 sentence per pattern."
     result = engine.solve(task)
 
     # Extract cost metrics

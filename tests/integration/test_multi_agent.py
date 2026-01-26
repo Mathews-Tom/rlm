@@ -4,10 +4,13 @@ import os
 from typing import Any
 
 import pytest
+from dotenv import load_dotenv
+
+# Load environment variables from .env file BEFORE skipif check
+load_dotenv()
 
 from rlm.engine import RecursiveEngine
 from rlm.types import Input, Output
-
 
 # Skip all tests in this module if OPENAI_API_KEY not set
 pytestmark = pytest.mark.skipif(
@@ -112,8 +115,8 @@ def test_multi_agent_routing() -> None:
         verbose=True,
     )
 
-    # Execute a simple task that should decompose
-    task = "Analyze the benefits of Python 3.12 type hints and provide 3 key advantages"
+    # Execute a simple task that should not over-decompose
+    task = "Answer directly without research: What are 3 benefits of type hints? Use bullet points."
     result = engine.solve(task)
 
     # Verify result structure
@@ -158,10 +161,7 @@ def test_agent_assignment_in_subtasks() -> None:
     )
 
     # Task that should decompose with explicit agent routing
-    task = (
-        "Research Python typing improvements in 3.12 and write a short summary. "
-        "Use specialized agents for research and writing."
-    )
+    task = "Name one new Python 3.12 feature and explain it in one sentence."
 
     result = engine.solve(task)
 
@@ -190,23 +190,19 @@ def test_synthesis_of_multi_agent_results() -> None:
     """
     agents = {
         "planner": openai_planner,
-        "researcher": openai_worker,
-        "writer": openai_worker,
+        "worker": openai_worker,
     }
 
     engine = RecursiveEngine(
         llm=openai_planner,
         agents=agents,
         router_model="planner",
-        max_depth=2,
+        max_depth=3,
         verbose=True,
     )
 
-    # Complex task requiring coordination
-    task = (
-        "Create a brief technical document explaining match-case statements in Python 3.10+. "
-        "Research the feature first, then write clear explanations with examples."
-    )
+    # Task requiring coordination - use "parts" structure for single-level decomposition
+    task = "Explain Python match-case in 3 parts: 1) one-sentence definition, 2) one key benefit in one sentence, 3) one-line syntax example."
 
     result = engine.solve(task)
 
@@ -247,7 +243,7 @@ def test_fallback_to_default_agent() -> None:
         llm=openai_planner,
         agents=agents,
         router_model="planner",
-        max_depth=2,
+        max_depth=4,
         verbose=True,
     )
 

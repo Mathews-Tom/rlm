@@ -9,8 +9,10 @@ dependencies = []
 [dependency-groups]
 dev = [
     "mypy>=1.19.1",
+    "openai>=2.15.0",
     "pytest>=9.0.2",
     "pytest-cov>=7.0.0",
+    "python-dotenv>=1.2.1",
     "ruff>=0.14.14",
 ]
 
@@ -27,3 +29,8 @@ reportOptionalMemberAccess = true
 stubPath = "src"
 venvPath = "."
 venv = ".venv"
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests as integration tests (require API keys, slower execution)",
+]

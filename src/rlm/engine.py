@@ -328,6 +328,9 @@ class RecursiveEngine:
     def _execute_leaf(self, task: str, context: RLMContext) -> Output:
         """Execute task atomically (leaf node).
 
+        Uses the agent specified in context.active_agent for execution,
+        respecting multi-agent routing decisions.
+
         Args:
             task: Task description
             context: Current execution context
@@ -349,8 +352,11 @@ class RecursiveEngine:
             {"role": "user", "content": task},
         ]
 
+        # Get the agent assigned to this task (respects routing)
+        agent = self._get_agent(context.active_agent)
+
         try:
-            result = self.llm(inputs, {"mode": "worker"})
+            result = agent(inputs, {"mode": "worker"})
         except Exception as e:
             raise ExecutionError(f"LLM call failed for task: {task!r}") from e
 
@@ -408,10 +414,12 @@ Synthesize these results into a coherent, comprehensive answer to the original t
             },
         ]
 
-        # Use router agent for synthesis (if available)
-        synthesizer = self._get_agent(
-            self.router_model if self.agents else None
+        # Use dedicated synthesizer agent if available, otherwise router agent
+        synthesizer_name = (
+            "synthesizer" if "synthesizer" in self.agents
+            else (self.router_model if self.agents else None)
         )
+        synthesizer = self._get_agent(synthesizer_name)
 
         try:
             result = synthesizer(inputs, {"mode": "synthesizer"})
@@ -425,6 +433,9 @@ Synthesize these results into a coherent, comprehensive answer to the original t
         result["metadata"]["task_id"] = context.task_id
         result["metadata"]["breadcrumbs"] = context.breadcrumbs
         result["metadata"]["sub_results_count"] = len(results)
+
+        # Preserve child results for metadata extraction (cost tracking, etc.)
+        result["sub_results"] = results
 
         return result
 

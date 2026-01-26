@@ -37,9 +37,10 @@ Your goal is to decide whether a task should be:
 }}
 
 **Agent Assignment Guidelines:**
-- Assign sub-tasks to agents based on their capabilities and descriptions
-- Use specialized agents for research, analysis, coding, etc.
-- Use null or omit assigned_agent to use the default router agent
+- CRITICAL: Only assign sub-tasks to "planner" agent if they need FURTHER DECOMPOSITION
+- For execution tasks (research, write, analyze, code, etc.), assign to OTHER agents (worker, researcher, writer, etc.)
+- Default behavior: null/omitted assigned_agent routes to router agent (typically "planner")
+- Best practice: Explicitly assign execution tasks to non-planner agents to prevent infinite recursion
 - Ensure agent names match available agents exactly
 
 **Quality Standards:**

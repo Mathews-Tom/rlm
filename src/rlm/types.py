@@ -32,6 +32,7 @@ class Output(TypedDict):
 
     content: str
     metadata: dict[str, Any]
+    sub_results: NotRequired[list[Output]]  # Optional, for nested results
 
 
 class LLMCaller(Protocol):

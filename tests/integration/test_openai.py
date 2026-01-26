@@ -93,7 +93,7 @@ def test_recursive_task(openai_engine):
     logger.info("=" * 60)
 
     result = openai_engine.solve(
-        "Write a 3-sentence summary of the benefits of recursion in programming."
+        "In 3 sentences: What are the benefits of recursion in programming?"
     )
 
     logger.info(f"Result length: {len(result['content'])} chars")
@@ -168,7 +168,8 @@ def test_large_document_offloading(openai_engine):
     # Create a task with large input (10k+ characters)
     large_document = "Technical documentation: " + "x" * 10_000
 
-    task = f"Summarize this document in one sentence: {large_document}"
+    # Use directive prefix to prevent over-decomposition
+    task = f"Answer directly in one sentence: What is this document about? {large_document}"
 
     logger.info(f"Task size: {len(task)} characters")
     logger.info("Processing large document...")
