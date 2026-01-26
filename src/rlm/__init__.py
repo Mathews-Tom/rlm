@@ -9,7 +9,16 @@ from rlm.exceptions import (
     RLMError,
 )
 from rlm.memory import RLMContext, SharedMemory
-from rlm.types import Input, Item, LLMCaller, Output, PlannerDecision, TraceObject
+from rlm.prompts import PLANNER_SYSTEM_PROMPT, SYNTHESIZER_SYSTEM_PROMPT
+from rlm.types import (
+    Input,
+    Item,
+    LLMCaller,
+    Output,
+    PlannerDecision,
+    SubTask,
+    TraceObject,
+)
 
 __all__ = [
     "RecursiveEngine",
@@ -19,8 +28,11 @@ __all__ = [
     "Output",
     "Item",
     "LLMCaller",
+    "SubTask",
     "PlannerDecision",
     "TraceObject",
+    "PLANNER_SYSTEM_PROMPT",
+    "SYNTHESIZER_SYSTEM_PROMPT",
     "RLMError",
     "RecursionDepthError",
     "MaxStepsError",

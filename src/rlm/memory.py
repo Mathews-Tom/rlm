@@ -71,6 +71,7 @@ class RLMContext:
         depth: Current recursion depth (0 = root)
         breadcrumbs: Path from root to current node (task descriptions)
         memory_ref: Shared memory store for variable offloading
+        active_agent: Name of agent executing current task (None = default LLM)
 
     Example:
         Root context:
@@ -80,15 +81,18 @@ class RLMContext:
         ...     parent_id=None,
         ...     depth=0,
         ...     breadcrumbs=(),
-        ...     memory_ref=memory
+        ...     memory_ref=memory,
+        ...     active_agent=None
         ... )
 
-        Child context:
-        >>> child = context.create_child("def456", "Research topic")
+        Child context with agent:
+        >>> child = context.create_child("def456", "Research topic", active_agent="researcher")
         >>> child.depth
         1
         >>> child.breadcrumbs
         ('Research topic',)
+        >>> child.active_agent
+        'researcher'
     """
 
     task_id: str
@@ -96,19 +100,26 @@ class RLMContext:
     depth: int
     breadcrumbs: tuple[str, ...]
     memory_ref: SharedMemory
+    active_agent: str | None = None
 
-    def create_child(self, task_id: str, step_description: str) -> RLMContext:
+    def create_child(
+        self,
+        task_id: str,
+        step_description: str,
+        active_agent: str | None = None,
+    ) -> RLMContext:
         """Create child context for recursive call.
 
         Args:
             task_id: Unique ID for child task
             step_description: Description of sub-task (added to breadcrumbs)
+            active_agent: Name of agent for child task (None = inherit from parent)
 
         Returns:
             New RLMContext with incremented depth
 
         Example:
-            >>> parent = RLMContext("parent", None, 0, (), memory)
+            >>> parent = RLMContext("parent", None, 0, (), memory, None)
             >>> child = parent.create_child("child", "Sub-task")
             >>> child.parent_id
             'parent'
@@ -116,6 +127,13 @@ class RLMContext:
             1
             >>> child.breadcrumbs
             ('Sub-task',)
+            >>> child.active_agent  # Inherited from parent
+            None
+
+            With agent assignment:
+            >>> child2 = parent.create_child("child2", "Research", active_agent="researcher")
+            >>> child2.active_agent
+            'researcher'
         """
         return RLMContext(
             task_id=task_id,
@@ -123,4 +141,5 @@ class RLMContext:
             depth=self.depth + 1,
             breadcrumbs=self.breadcrumbs + (step_description,),
             memory_ref=self.memory_ref,
+            active_agent=active_agent if active_agent is not None else self.active_agent,
         )

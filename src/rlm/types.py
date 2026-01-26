@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Protocol, TypedDict
+from typing import Any, Literal, NotRequired, Protocol, TypedDict
 
 
 # OpenResponses Protocol Types
@@ -57,16 +57,31 @@ class LLMCaller(Protocol):
 
 
 # Internal Control Flow Types
+class SubTask(TypedDict):
+    """Sub-task with agent assignment for multi-agent routing.
+
+    Used within PlannerDecision to specify task decomposition
+    with optional agent assignment for specialized execution.
+
+    Fields:
+        description: Required task description
+        assigned_agent: Optional agent name (None means use router_model)
+    """
+
+    description: str
+    assigned_agent: NotRequired[str | None]
+
+
 class PlannerDecision(TypedDict):
     """Schema for planner LLM output.
 
     Used to decide whether to execute task atomically
-    or decompose into sub-tasks.
+    or decompose into sub-tasks with agent assignments.
     """
 
     thoughts: str
     decision: Literal["EXECUTE", "RECURSE"]
-    sub_tasks: list[str]
+    sub_tasks: list[SubTask]  # Enhanced to support agent assignment
 
 
 # Trace Object (MIMIR Compatible)
@@ -91,6 +106,7 @@ __all__ = [
     "Item",
     "Output",
     "LLMCaller",
+    "SubTask",
     "PlannerDecision",
     "TraceObject",
 ]
