@@ -216,6 +216,7 @@ __marimo__/
 .sage/
 
 # Local Testing
+.approval_tests_temp
 
 # macOS
 .DS_Store
