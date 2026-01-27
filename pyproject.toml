@@ -1,5 +1,5 @@
 [project]
-name = "rlm"
+name = "py-rlm"
 version = "0.1.0"
 description = "A Python framework for building intelligent, recursive task decomposition systems powered by Large Language Models"
 readme = "README.md"
