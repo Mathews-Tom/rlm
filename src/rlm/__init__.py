@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import rlm.async_types as async_types
 import rlm.types as rlm_types
-from rlm.checkpoints import Checkpoint, CheckpointStore, InMemoryCheckpointStore
+from rlm.checkpoints import (
+    Checkpoint,
+    CheckpointStore,
+    CheckpointableEngine,
+    InMemoryCheckpointStore,
+)
 from rlm.engine import RecursiveEngine
 from rlm.exceptions import (
     ExecutionError,
@@ -35,6 +40,7 @@ __all__ = [
     "SharedMemory",
     "Checkpoint",
     "CheckpointStore",
+    "CheckpointableEngine",
     "InMemoryCheckpointStore",
     "Input",
     "Output",
