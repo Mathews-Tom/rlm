@@ -1,4 +1,4 @@
-"""Unit tests for Checkpoint data model.
+"""Unit tests for Checkpoint data model and storage.
 
 Tests cover:
 - Checkpoint creation and validation
@@ -8,16 +8,21 @@ Tests cover:
 - Timestamp handling (ISO 8601 format)
 - Factory method with auto-generated IDs
 - Error handling for invalid data
+- CheckpointStore protocol
+- InMemoryCheckpointStore implementation
+- Thread-safe concurrent operations
+- TTL-based automatic cleanup
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from rlm.checkpoints import Checkpoint
+from rlm.checkpoints import Checkpoint, InMemoryCheckpointStore
 from rlm.memory import RLMContext, SharedMemory
 
 
@@ -411,3 +416,293 @@ class TestMemorySerialization:
         assert restored.context.memory_ref.resolve(ref1) == "simple value"
         assert restored.context.memory_ref.resolve(ref2) == "nested data content"
         assert restored.context.memory_ref.resolve(ref3) == "list content"
+
+
+class TestInMemoryCheckpointStore:
+    """Test in-memory checkpoint storage."""
+
+    @pytest.fixture
+    def sample_context(self) -> RLMContext:
+        """Create sample execution context."""
+        return RLMContext(
+            task_id="task-1",
+            parent_id=None,
+            depth=0,
+            breadcrumbs=(),
+            memory_ref=SharedMemory(),
+            active_agent=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_save_and_load(self, sample_context: RLMContext) -> None:
+        """Test saving and loading checkpoint."""
+        store = InMemoryCheckpointStore()
+        checkpoint = Checkpoint.create(task="Test task", context=sample_context)
+
+        await store.save(checkpoint)
+        loaded = await store.load(checkpoint.checkpoint_id)
+
+        assert loaded is not None
+        assert loaded.checkpoint_id == checkpoint.checkpoint_id
+        assert loaded.task == checkpoint.task
+
+    @pytest.mark.asyncio
+    async def test_load_nonexistent(self) -> None:
+        """Test loading non-existent checkpoint returns None."""
+        store = InMemoryCheckpointStore()
+        loaded = await store.load("nonexistent-id")
+
+        assert loaded is None
+
+    @pytest.mark.asyncio
+    async def test_delete_existing(self, sample_context: RLMContext) -> None:
+        """Test deleting existing checkpoint."""
+        store = InMemoryCheckpointStore()
+        checkpoint = Checkpoint.create(task="Test task", context=sample_context)
+
+        await store.save(checkpoint)
+        result = await store.delete(checkpoint.checkpoint_id)
+
+        assert result is True
+
+        # Verify it's gone
+        loaded = await store.load(checkpoint.checkpoint_id)
+        assert loaded is None
+
+    @pytest.mark.asyncio
+    async def test_delete_nonexistent(self) -> None:
+        """Test deleting non-existent checkpoint returns False."""
+        store = InMemoryCheckpointStore()
+        result = await store.delete("nonexistent-id")
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_list_empty(self) -> None:
+        """Test listing empty store returns empty list."""
+        store = InMemoryCheckpointStore()
+        checkpoints = await store.list()
+
+        assert checkpoints == []
+
+    @pytest.mark.asyncio
+    async def test_list_sorted_by_timestamp(self, sample_context: RLMContext) -> None:
+        """Test list returns checkpoints sorted by timestamp (newest first)."""
+        store = InMemoryCheckpointStore()
+
+        # Create checkpoints with different timestamps
+        cp1 = Checkpoint(
+            checkpoint_id="cp1",
+            task="Task 1",
+            context=sample_context,
+            completed_steps=[],
+            pending_steps=[],
+            results={},
+            timestamp="2026-01-27T10:00:00+00:00",
+        )
+
+        cp2 = Checkpoint(
+            checkpoint_id="cp2",
+            task="Task 2",
+            context=sample_context,
+            completed_steps=[],
+            pending_steps=[],
+            results={},
+            timestamp="2026-01-27T12:00:00+00:00",  # Newest
+        )
+
+        cp3 = Checkpoint(
+            checkpoint_id="cp3",
+            task="Task 3",
+            context=sample_context,
+            completed_steps=[],
+            pending_steps=[],
+            results={},
+            timestamp="2026-01-27T11:00:00+00:00",
+        )
+
+        await store.save(cp1)
+        await store.save(cp2)
+        await store.save(cp3)
+
+        checkpoints = await store.list()
+
+        assert len(checkpoints) == 3
+        assert checkpoints[0].checkpoint_id == "cp2"  # Newest
+        assert checkpoints[1].checkpoint_id == "cp3"
+        assert checkpoints[2].checkpoint_id == "cp1"  # Oldest
+
+    @pytest.mark.asyncio
+    async def test_clear(self, sample_context: RLMContext) -> None:
+        """Test clearing all checkpoints."""
+        store = InMemoryCheckpointStore()
+
+        cp1 = Checkpoint.create(task="Task 1", context=sample_context)
+        cp2 = Checkpoint.create(task="Task 2", context=sample_context)
+
+        await store.save(cp1)
+        await store.save(cp2)
+
+        await store.clear()
+
+        checkpoints = await store.list()
+        assert checkpoints == []
+
+
+class TestInMemoryCheckpointStoreTTL:
+    """Test TTL-based automatic cleanup."""
+
+    @pytest.fixture
+    def sample_context(self) -> RLMContext:
+        """Create sample execution context."""
+        return RLMContext(
+            task_id="task-1",
+            parent_id=None,
+            depth=0,
+            breadcrumbs=(),
+            memory_ref=SharedMemory(),
+            active_agent=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_ttl_cleanup_old_checkpoints(self, sample_context: RLMContext) -> None:
+        """Test that old checkpoints are cleaned up based on TTL."""
+        # Store with 1 second TTL
+        store = InMemoryCheckpointStore(ttl_seconds=1)
+
+        # Create old checkpoint (2 seconds ago)
+        now = datetime.now(timezone.utc)
+        old_timestamp = (now - timedelta(seconds=2)).isoformat()
+
+        old_checkpoint = Checkpoint(
+            checkpoint_id="old",
+            task="Old task",
+            context=sample_context,
+            completed_steps=[],
+            pending_steps=[],
+            results={},
+            timestamp=old_timestamp,
+        )
+
+        # Create recent checkpoint
+        recent_checkpoint = Checkpoint.create(task="Recent task", context=sample_context)
+
+        await store.save(old_checkpoint)
+        await store.save(recent_checkpoint)
+
+        # List should trigger cleanup and only return recent checkpoint
+        checkpoints = await store.list()
+
+        assert len(checkpoints) == 1
+        assert checkpoints[0].checkpoint_id == recent_checkpoint.checkpoint_id
+
+    @pytest.mark.asyncio
+    async def test_load_expired_checkpoint_returns_none(self, sample_context: RLMContext) -> None:
+        """Test that loading expired checkpoint returns None."""
+        store = InMemoryCheckpointStore(ttl_seconds=1)
+
+        # Create old checkpoint (2 seconds ago)
+        now = datetime.now(timezone.utc)
+        old_timestamp = (now - timedelta(seconds=2)).isoformat()
+
+        old_checkpoint = Checkpoint(
+            checkpoint_id="old",
+            task="Old task",
+            context=sample_context,
+            completed_steps=[],
+            pending_steps=[],
+            results={},
+            timestamp=old_timestamp,
+        )
+
+        await store.save(old_checkpoint)
+
+        # Load should trigger cleanup and return None
+        loaded = await store.load("old")
+        assert loaded is None
+
+    @pytest.mark.asyncio
+    async def test_no_ttl_means_no_expiry(self, sample_context: RLMContext) -> None:
+        """Test that checkpoints don't expire when TTL is None."""
+        store = InMemoryCheckpointStore(ttl_seconds=None)
+
+        # Create old checkpoint (1 hour ago)
+        now = datetime.now(timezone.utc)
+        old_timestamp = (now - timedelta(hours=1)).isoformat()
+
+        old_checkpoint = Checkpoint(
+            checkpoint_id="old",
+            task="Old task",
+            context=sample_context,
+            completed_steps=[],
+            pending_steps=[],
+            results={},
+            timestamp=old_timestamp,
+        )
+
+        await store.save(old_checkpoint)
+
+        # Should still be loadable
+        loaded = await store.load("old")
+        assert loaded is not None
+        assert loaded.checkpoint_id == "old"
+
+
+class TestInMemoryCheckpointStoreThreadSafety:
+    """Test concurrent access thread safety."""
+
+    @pytest.fixture
+    def sample_context(self) -> RLMContext:
+        """Create sample execution context."""
+        return RLMContext(
+            task_id="task-1",
+            parent_id=None,
+            depth=0,
+            breadcrumbs=(),
+            memory_ref=SharedMemory(),
+            active_agent=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_concurrent_saves(self, sample_context: RLMContext) -> None:
+        """Test concurrent saves are thread-safe."""
+        store = InMemoryCheckpointStore()
+
+        # Create 10 checkpoints concurrently
+        checkpoints = [
+            Checkpoint.create(task=f"Task {i}", context=sample_context)
+            for i in range(10)
+        ]
+
+        # Save all concurrently
+        await asyncio.gather(*[store.save(cp) for cp in checkpoints])
+
+        # Verify all saved
+        loaded = await store.list()
+        assert len(loaded) == 10
+
+    @pytest.mark.asyncio
+    async def test_concurrent_reads_and_writes(self, sample_context: RLMContext) -> None:
+        """Test concurrent reads and writes don't cause data corruption."""
+        store = InMemoryCheckpointStore()
+
+        checkpoint = Checkpoint.create(task="Concurrent test", context=sample_context)
+        await store.save(checkpoint)
+
+        # Perform concurrent reads and writes
+        async def read_checkpoint() -> None:
+            for _ in range(10):
+                await store.load(checkpoint.checkpoint_id)
+
+        async def write_checkpoint() -> None:
+            for _ in range(10):
+                await store.save(checkpoint)
+
+        # Run 5 readers and 5 writers concurrently
+        tasks = [read_checkpoint() for _ in range(5)] + [write_checkpoint() for _ in range(5)]
+        await asyncio.gather(*tasks)
+
+        # Verify checkpoint is still intact
+        loaded = await store.load(checkpoint.checkpoint_id)
+        assert loaded is not None
+        assert loaded.checkpoint_id == checkpoint.checkpoint_id

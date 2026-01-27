@@ -36,11 +36,12 @@ Example:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime, timedelta, timezone
+from typing import Any, Protocol
 
 from rlm.memory import RLMContext, SharedMemory
 
@@ -284,6 +285,208 @@ def _deserialize_memory(data: dict[str, Any]) -> SharedMemory:
     return memory
 
 
+class CheckpointStore(Protocol):
+    """Protocol for checkpoint storage backends.
+
+    Defines standard interface for pluggable checkpoint persistence.
+    Implementations can use memory, disk, Redis, S3, or other storage.
+
+    All methods are async to support I/O-bound storage operations.
+
+    Example:
+        >>> class MyStore:
+        ...     async def save(self, checkpoint: Checkpoint) -> None:
+        ...         # Store checkpoint
+        ...         pass
+        ...
+        ...     async def load(self, checkpoint_id: str) -> Checkpoint | None:
+        ...         # Load checkpoint
+        ...         pass
+        ...
+        ...     async def delete(self, checkpoint_id: str) -> bool:
+        ...         # Delete checkpoint
+        ...         pass
+        ...
+        ...     async def list(self) -> list[Checkpoint]:
+        ...         # List all checkpoints
+        ...         pass
+    """
+
+    async def save(self, checkpoint: Checkpoint) -> None:
+        """Save checkpoint to storage.
+
+        Args:
+            checkpoint: Checkpoint to persist
+
+        Raises:
+            Exception: If save operation fails
+        """
+        ...
+
+    async def load(self, checkpoint_id: str) -> Checkpoint | None:
+        """Load checkpoint from storage.
+
+        Args:
+            checkpoint_id: Unique identifier of checkpoint
+
+        Returns:
+            Checkpoint if found, None otherwise
+
+        Raises:
+            Exception: If load operation fails
+        """
+        ...
+
+    async def delete(self, checkpoint_id: str) -> bool:
+        """Delete checkpoint from storage.
+
+        Args:
+            checkpoint_id: Unique identifier of checkpoint
+
+        Returns:
+            True if deleted, False if not found
+
+        Raises:
+            Exception: If delete operation fails
+        """
+        ...
+
+    async def list(self) -> list[Checkpoint]:
+        """List all checkpoints, sorted by timestamp (newest first).
+
+        Returns:
+            List of checkpoints sorted by timestamp descending
+
+        Raises:
+            Exception: If list operation fails
+        """
+        ...
+
+
+class InMemoryCheckpointStore:
+    """In-memory checkpoint storage for testing and development.
+
+    Thread-safe implementation using asyncio.Lock for concurrent access.
+    Supports automatic cleanup of old checkpoints via TTL.
+
+    Attributes:
+        ttl_seconds: Time-to-live for checkpoints in seconds (None = no expiry)
+
+    Example:
+        >>> store = InMemoryCheckpointStore(ttl_seconds=3600)
+        >>> checkpoint = Checkpoint.create(task="Test", context=ctx)
+        >>> await store.save(checkpoint)
+        >>> loaded = await store.load(checkpoint.checkpoint_id)
+        >>> assert loaded.checkpoint_id == checkpoint.checkpoint_id
+    """
+
+    def __init__(self, ttl_seconds: int | None = None) -> None:
+        """Initialize in-memory checkpoint store.
+
+        Args:
+            ttl_seconds: Time-to-live for checkpoints in seconds.
+                        None means no automatic expiry.
+        """
+        self._store: dict[str, Checkpoint] = {}
+        self._lock = asyncio.Lock()
+        self.ttl_seconds = ttl_seconds
+
+    async def save(self, checkpoint: Checkpoint) -> None:
+        """Save checkpoint to memory.
+
+        Thread-safe operation using asyncio.Lock.
+
+        Args:
+            checkpoint: Checkpoint to save
+        """
+        async with self._lock:
+            self._store[checkpoint.checkpoint_id] = checkpoint
+
+    async def load(self, checkpoint_id: str) -> Checkpoint | None:
+        """Load checkpoint from memory.
+
+        Performs TTL cleanup before loading if TTL is configured.
+
+        Args:
+            checkpoint_id: Unique identifier of checkpoint
+
+        Returns:
+            Checkpoint if found and not expired, None otherwise
+        """
+        # Clean expired checkpoints first
+        await self._cleanup_expired()
+
+        async with self._lock:
+            return self._store.get(checkpoint_id)
+
+    async def delete(self, checkpoint_id: str) -> bool:
+        """Delete checkpoint from memory.
+
+        Args:
+            checkpoint_id: Unique identifier of checkpoint
+
+        Returns:
+            True if deleted, False if not found
+        """
+        async with self._lock:
+            if checkpoint_id in self._store:
+                del self._store[checkpoint_id]
+                return True
+            return False
+
+    async def list(self) -> list[Checkpoint]:
+        """List all non-expired checkpoints, sorted by timestamp (newest first).
+
+        Performs TTL cleanup before listing if TTL is configured.
+
+        Returns:
+            List of checkpoints sorted by timestamp descending
+        """
+        # Clean expired checkpoints first
+        await self._cleanup_expired()
+
+        async with self._lock:
+            checkpoints = list(self._store.values())
+
+        # Sort by timestamp descending (newest first)
+        checkpoints.sort(
+            key=lambda cp: datetime.fromisoformat(cp.timestamp.replace("Z", "+00:00")),
+            reverse=True,
+        )
+        return checkpoints
+
+    async def _cleanup_expired(self) -> None:
+        """Remove expired checkpoints based on TTL.
+
+        Only runs if ttl_seconds is configured.
+        """
+        if self.ttl_seconds is None:
+            return
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(seconds=self.ttl_seconds)
+
+        async with self._lock:
+            expired_ids = [
+                cp_id
+                for cp_id, cp in self._store.items()
+                if datetime.fromisoformat(cp.timestamp.replace("Z", "+00:00")) < cutoff
+            ]
+
+            for cp_id in expired_ids:
+                del self._store[cp_id]
+
+    async def clear(self) -> None:
+        """Clear all checkpoints from storage.
+
+        Useful for testing and development.
+        """
+        async with self._lock:
+            self._store.clear()
+
+
 __all__ = [
     "Checkpoint",
+    "CheckpointStore",
+    "InMemoryCheckpointStore",
 ]
