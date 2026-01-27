@@ -328,6 +328,7 @@ class ToolCallingEngine(AsyncRecursiveEngine):
         max_concurrency: int = 10,
         tool_timeout: float = 30.0,
         max_tool_retries: int = 2,
+        max_tool_iterations: int = 5,
         verbose: bool = False,
     ) -> None:
         """Initialize tool calling engine.
@@ -342,6 +343,8 @@ class ToolCallingEngine(AsyncRecursiveEngine):
             max_concurrency: Max concurrent tasks
             tool_timeout: Timeout for tool execution in seconds (default: 30.0)
             max_tool_retries: Max retries for transient tool failures (default: 2)
+            max_tool_iterations: Max iterations in tool calling loop (default: 5)
+                Prevents infinite loops when LLM continuously requests tools
             verbose: Enable debug logging
         """
         super().__init__(
@@ -356,6 +359,7 @@ class ToolCallingEngine(AsyncRecursiveEngine):
         self.tool_registry = tool_registry
         self.tool_timeout = tool_timeout
         self.max_tool_retries = max_tool_retries
+        self.max_tool_iterations = max_tool_iterations
 
     async def _execute_tool_calls(
         self, tool_calls: list[ToolCall]
@@ -475,13 +479,14 @@ class ToolCallingEngine(AsyncRecursiveEngine):
         ]
 
         # Iterative tool calling loop
-        max_iterations = 5  # Prevent infinite loops
+        # Supports "read-before-write" pattern where tool can call another tool
+        # by having the LLM request multiple tool calls in sequence
         result: Output | None = None
 
-        for iteration in range(max_iterations):
+        for iteration in range(self.max_tool_iterations):
             if self.verbose:
                 logger.info(
-                    f"[Depth {context.depth}] Tool calling iteration {iteration + 1}/{max_iterations}"
+                    f"[Depth {context.depth}] Tool calling iteration {iteration + 1}/{self.max_tool_iterations}"
                 )
 
             # Call LLM
@@ -526,11 +531,11 @@ class ToolCallingEngine(AsyncRecursiveEngine):
             raise ExecutionError(f"Tool calling loop failed to produce result for task: {task!r}")
 
         logger.warning(
-            f"Max tool calling iterations ({max_iterations}) reached for task: {task}"
+            f"Max tool calling iterations ({self.max_tool_iterations}) reached for task: {task}"
         )
         result["metadata"]["depth"] = context.depth
         result["metadata"]["task_id"] = context.task_id
-        result["metadata"]["tool_iterations"] = max_iterations
+        result["metadata"]["tool_iterations"] = self.max_tool_iterations
         result["metadata"]["max_iterations_reached"] = True
         return result
 
