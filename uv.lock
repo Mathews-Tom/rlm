@@ -1222,9 +1222,9 @@ wheels = [
 [[package]]
 name = "rlm"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 
-[package.dev-dependencies]
+[package.optional-dependencies]
 cache = [
     { name = "redis" },
     { name = "redisvl" },
@@ -1238,6 +1238,12 @@ cache-l2-local = [
     { name = "redisvl" },
     { name = "sentence-transformers" },
 ]
+observability = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
+]
+
+[package.dev-dependencies]
 dev = [
     { name = "mypy" },
     { name = "openai" },
@@ -1247,27 +1253,22 @@ dev = [
     { name = "python-dotenv" },
     { name = "ruff" },
 ]
-observability = [
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-sdk" },
-]
 
 [package.metadata]
+requires-dist = [
+    { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.20.0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'observability'", specifier = ">=1.20.0" },
+    { name = "redis", marker = "extra == 'cache'", specifier = ">=5.0.0" },
+    { name = "redis", marker = "extra == 'cache-l2'", specifier = ">=5.0.0" },
+    { name = "redis", marker = "extra == 'cache-l2-local'", specifier = ">=5.0.0" },
+    { name = "redisvl", marker = "extra == 'cache'", specifier = ">=0.3.0" },
+    { name = "redisvl", marker = "extra == 'cache-l2'", specifier = ">=0.3.0" },
+    { name = "redisvl", marker = "extra == 'cache-l2-local'", specifier = ">=0.3.0" },
+    { name = "sentence-transformers", marker = "extra == 'cache-l2-local'", specifier = ">=5.2.2" },
+]
+provides-extras = ["cache-l2", "cache-l2-local", "cache", "observability"]
 
 [package.metadata.requires-dev]
-cache = [
-    { name = "redis", specifier = ">=5.0.0" },
-    { name = "redisvl", specifier = ">=0.3.0" },
-]
-cache-l2 = [
-    { name = "redis", specifier = ">=5.0.0" },
-    { name = "redisvl", specifier = ">=0.3.0" },
-]
-cache-l2-local = [
-    { name = "redis", specifier = ">=5.0.0" },
-    { name = "redisvl", specifier = ">=0.3.0" },
-    { name = "sentence-transformers", specifier = ">=5.2.2" },
-]
 dev = [
     { name = "mypy", specifier = ">=1.19.1" },
     { name = "openai", specifier = ">=2.15.0" },
@@ -1276,10 +1277,6 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "ruff", specifier = ">=0.14.14" },
-]
-observability = [
-    { name = "opentelemetry-api", specifier = ">=1.20.0" },
-    { name = "opentelemetry-sdk", specifier = ">=1.20.0" },
 ]
 
 [[package]]

@@ -26,12 +26,31 @@ This creates a hierarchical problem-solving approach where complex tasks are aut
 
 ## Installation
 
-### Prerequisites
+### From PyPI (Recommended)
+
+```bash
+pip install rlm
+```
+
+**Optional dependencies:**
+
+```bash
+# With Redis L2 cache (OpenAI embeddings)
+pip install rlm[cache-l2]
+
+# With observability (OpenTelemetry)
+pip install rlm[observability]
+
+# All extras
+pip install rlm[cache-l2,observability]
+```
+
+### From Source
+
+**Prerequisites:**
 
 - Python 3.12+
 - `uv` package manager
-
-### Install Dependencies
 
 ```bash
 # Clone the repository
