@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any
 
 from rlm.types import Input, LLMCaller, Output
 
@@ -22,7 +23,7 @@ def test_output_typeddict() -> None:
 def test_llm_caller_protocol() -> None:
     """Verify LLMCaller protocol compliance."""
 
-    def my_llm(inputs: list[Input], context: dict) -> Output:
+    def my_llm(inputs: list[Input], context: dict[str, Any]) -> Output:
         # Echo the inputs count in response to use the parameter
         return {
             "content": f"test response (processed {len(inputs)} inputs)",

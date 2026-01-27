@@ -184,7 +184,7 @@ class RecursiveEngine:
         # Agent not found - log warning and fall back
         if self.verbose:
             print(
-                f"⚠️  Agent '{agent_name}' not found in registry. "
+                f"Agent '{agent_name}' not found in registry. "
                 f"Falling back to default LLM. "
                 f"Available agents: {list(self.agents.keys())}"
             )
@@ -453,6 +453,8 @@ Synthesize these results into a coherent, comprehensive answer to the original t
         Returns:
             System prompt for planner LLM with agent information
         """
+        _ = task
+
         # Build agent descriptions
         if self.agents:
             available_agents = ", ".join(self.agents.keys())

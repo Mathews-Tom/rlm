@@ -28,11 +28,14 @@ def openai_expensive(inputs: list[Input], context: dict[str, Any]) -> Output:
 
     client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    messages = [{"role": msg["role"], "content": msg["content"]} for msg in inputs]
+    # Type messages explicitly to match OpenAI's ChatCompletionMessageParam
+    messages: list[dict[str, str]] = [
+        {"role": msg["role"], "content": msg["content"]} for msg in inputs
+    ]
 
     response = client.chat.completions.create(
         model="gpt-4",
-        messages=messages,
+        messages=messages,  # type: ignore[arg-type]
         temperature=0.7,
     )
 
@@ -58,11 +61,14 @@ def openai_planner(inputs: list[Input], context: dict[str, Any]) -> Output:
 
     client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    messages = [{"role": msg["role"], "content": msg["content"]} for msg in inputs]
+    # Type messages explicitly to match OpenAI's ChatCompletionMessageParam
+    messages: list[dict[str, str]] = [
+        {"role": msg["role"], "content": msg["content"]} for msg in inputs
+    ]
 
     response = client.chat.completions.create(
         model="gpt-4",
-        messages=messages,
+        messages=messages,  # type: ignore[arg-type]
         temperature=0.7,
     )
 
@@ -88,11 +94,14 @@ def openai_cheap(inputs: list[Input], context: dict[str, Any]) -> Output:
 
     client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    messages = [{"role": msg["role"], "content": msg["content"]} for msg in inputs]
+    # Type messages explicitly to match OpenAI's ChatCompletionMessageParam
+    messages: list[dict[str, str]] = [
+        {"role": msg["role"], "content": msg["content"]} for msg in inputs
+    ]
 
     response = client.chat.completions.create(
         model="gpt-3.5-turbo",
-        messages=messages,
+        messages=messages,  # type: ignore[arg-type]
         temperature=0.7,
     )
 
@@ -123,10 +132,10 @@ def _calculate_cost(model: str, tokens: int) -> float:
     return tokens * rates.get(model, 0.0)
 
 
-def _extract_cost_metrics(result: Output) -> dict[str, float]:
+def _extract_cost_metrics(result: Output) -> dict[str, Any]:
     """Extract cost and token metrics from result recursively."""
-    total_cost = 0.0
-    total_tokens = 0
+    total_cost: float = 0.0
+    total_tokens: int = 0
     model_counts: dict[str, int] = {}
 
     def traverse(obj: Any) -> None:
@@ -135,20 +144,26 @@ def _extract_cost_metrics(result: Output) -> dict[str, float]:
         if isinstance(obj, dict):
             # Extract metadata at current level
             if "metadata" in obj:
-                metadata = obj["metadata"]
-                if "cost" in metadata:
-                    total_cost += metadata["cost"]
-                if "tokens" in metadata:
-                    total_tokens += metadata["tokens"]
-                if "model" in metadata:
-                    model = metadata["model"]
-                    model_counts[model] = model_counts.get(model, 0) + 1
+                metadata: Any = obj["metadata"]  # type: ignore[reportUnknownVariableType]
+                if isinstance(metadata, dict):
+                    if "cost" in metadata:
+                        cost_value: Any = metadata["cost"]  # type: ignore[reportUnknownVariableType]
+                        if isinstance(cost_value, (int, float)):
+                            total_cost += float(cost_value)
+                    if "tokens" in metadata:
+                        tokens_value: Any = metadata["tokens"]  # type: ignore[reportUnknownVariableType]
+                        if isinstance(tokens_value, int):
+                            total_tokens += tokens_value
+                    if "model" in metadata:
+                        model: Any = metadata["model"]  # type: ignore[reportUnknownVariableType]
+                        if isinstance(model, str):
+                            model_counts[model] = model_counts.get(model, 0) + 1
 
             # Recurse into nested dicts
-            for value in obj.values():
+            for value in obj.values():  # type: ignore[reportUnknownVariableType]
                 traverse(value)
         elif isinstance(obj, list):
-            for item in obj:
+            for item in obj:  # type: ignore[reportUnknownVariableType]
                 traverse(item)
 
     traverse(result)

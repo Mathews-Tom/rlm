@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Literal, NotRequired, Protocol, TypedDict
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
 
 
 # OpenResponses Protocol Types
@@ -57,6 +60,57 @@ class LLMCaller(Protocol):
         ...
 
 
+class AsyncLLMCaller(Protocol):
+    """Async protocol for LLM backends.
+
+    Any async callable matching this signature can be used as an async LLM
+    backend. This enables dependency injection for async engines.
+
+    Example:
+        >>> async def my_async_llm(inputs: list[Input], context: dict[str, Any]) -> Output:
+        ...     return {"content": "result", "metadata": {}}
+    """
+
+    def __call__(
+        self, inputs: list[Input], context: dict[str, Any]
+    ) -> Awaitable[Output]:
+        """Call LLM asynchronously and return output.
+
+        Args:
+            inputs: List of Input messages (role, content)
+            context: Metadata (mode, schema, etc.)
+
+        Returns:
+            Awaitable Output dict with content and metadata
+        """
+        ...
+
+
+class AsyncToolCaller(Protocol):
+    """Async protocol for tool-calling backends.
+
+    Mirrors AsyncLLMCaller to enable tool pipelines that return Output.
+
+    Example:
+        >>> async def my_tool_call(inputs: list[Input], context: dict[str, Any]) -> Output:
+        ...     return {"content": "tool result", "metadata": {}}
+    """
+
+    def __call__(
+        self, inputs: list[Input], context: dict[str, Any]
+    ) -> Awaitable[Output]:
+        """Call tool backend asynchronously and return output.
+
+        Args:
+            inputs: List of Input messages (role, content)
+            context: Metadata (mode, schema, etc.)
+
+        Returns:
+            Awaitable Output dict with content and metadata
+        """
+        ...
+
+
 # Internal Control Flow Types
 class SubTask(TypedDict):
     """Sub-task with agent assignment for multi-agent routing.
@@ -107,6 +161,8 @@ __all__ = [
     "Item",
     "Output",
     "LLMCaller",
+    "AsyncLLMCaller",
+    "AsyncToolCaller",
     "SubTask",
     "PlannerDecision",
     "TraceObject",
