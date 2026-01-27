@@ -31,11 +31,8 @@ Example:
 from __future__ import annotations
 
 import asyncio
-import logging
 from dataclasses import dataclass
 from typing import Any, Callable
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -253,20 +250,21 @@ class ToolRegistry:
             logger.debug(f"Executing tool '{name}' with arguments: {arguments}")
 
             # Check if callable is async
+            result_str: str
             if asyncio.iscoroutinefunction(tool.callable):
-                result = await asyncio.wait_for(
+                result_str = await asyncio.wait_for(
                     tool.callable(arguments), timeout=timeout
                 )
             else:
                 # Run sync callable in executor to avoid blocking
                 loop = asyncio.get_event_loop()
-                result = await asyncio.wait_for(
+                result_str = await asyncio.wait_for(
                     loop.run_in_executor(None, tool.callable, arguments),
                     timeout=timeout,
                 )
 
             logger.debug(f"Tool '{name}' completed successfully")
-            return result
+            return result_str
 
         except asyncio.TimeoutError:
             error_msg = f"Tool '{name}' execution timed out after {timeout}s"
@@ -280,4 +278,261 @@ class ToolRegistry:
             raise RuntimeError(error_msg) from e
 
 
-__all__ = ["Tool", "ToolRegistry"]
+import logging
+
+from rlm.async_engine import AsyncRecursiveEngine
+from rlm.exceptions import ExecutionError
+from rlm.memory import RLMContext
+from rlm.types import AsyncLLMCaller, Input, Output, ToolCall
+
+logger = logging.getLogger(__name__)
+
+
+class ToolCallingEngine(AsyncRecursiveEngine):
+    """Async recursive engine with tool calling support.
+
+    Extends AsyncRecursiveEngine to enable LLM tool calling workflows.
+    When the LLM returns tool_calls in its response, this engine executes
+    the requested tools and injects results back into the conversation.
+
+    Example:
+        >>> registry = ToolRegistry()
+        >>> registry.register(search_tool)
+        >>> registry.register(calculator_tool)
+        >>>
+        >>> async def my_llm(inputs, context):
+        ...     # Your LLM that supports tool calling
+        ...     return {
+        ...         "content": "",
+        ...         "metadata": {},
+        ...         "tool_calls": [{"name": "search", "arguments": {"query": "AI news"}}]
+        ...     }
+        >>>
+        >>> engine = ToolCallingEngine(
+        ...     llm=my_llm,
+        ...     tool_registry=registry,
+        ...     max_depth=3,
+        ...     verbose=True
+        ... )
+        >>> result = await engine.solve("Find latest AI news")
+    """
+
+    def __init__(
+        self,
+        llm: AsyncLLMCaller,
+        tool_registry: ToolRegistry,
+        agents: dict[str, AsyncLLMCaller] | None = None,
+        router_model: str = "planner",
+        max_depth: int = 3,
+        max_steps: int = 100,
+        max_concurrency: int = 10,
+        tool_timeout: float = 30.0,
+        max_tool_retries: int = 2,
+        verbose: bool = False,
+    ) -> None:
+        """Initialize tool calling engine.
+
+        Args:
+            llm: Async LLM caller that supports tool calling
+            tool_registry: ToolRegistry instance with registered tools
+            agents: Optional multi-agent registry
+            router_model: Agent name for planning decisions
+            max_depth: Maximum recursion depth
+            max_steps: Maximum total execution steps
+            max_concurrency: Max concurrent tasks
+            tool_timeout: Timeout for tool execution in seconds (default: 30.0)
+            max_tool_retries: Max retries for transient tool failures (default: 2)
+            verbose: Enable debug logging
+        """
+        super().__init__(
+            llm=llm,
+            agents=agents,
+            router_model=router_model,
+            max_depth=max_depth,
+            max_steps=max_steps,
+            max_concurrency=max_concurrency,
+            verbose=verbose,
+        )
+        self.tool_registry = tool_registry
+        self.tool_timeout = tool_timeout
+        self.max_tool_retries = max_tool_retries
+
+    async def _execute_tool_calls(
+        self, tool_calls: list[ToolCall]
+    ) -> list[tuple[str, str]]:
+        """Execute list of tool calls and return results.
+
+        Executes tools in sequence (not parallel) to maintain deterministic
+        ordering and handle dependencies between tool calls.
+
+        Args:
+            tool_calls: List of ToolCall dicts with name and arguments
+
+        Returns:
+            List of (tool_name, result_string) tuples
+
+        Example:
+            >>> tool_calls = [
+            ...     {"name": "search", "arguments": {"query": "Python"}},
+            ...     {"name": "calculator", "arguments": {"expr": "2+2"}}
+            ... ]
+            >>> results = await engine._execute_tool_calls(tool_calls)
+            >>> results
+            [("search", '{"results": [...]}'), ("calculator", "4")]
+        """
+        results: list[tuple[str, str]] = []
+
+        for tool_call in tool_calls:
+            tool_name = tool_call["name"]
+            arguments = tool_call["arguments"]
+
+            if self.verbose:
+                logger.info(f"Executing tool: {tool_name} with args: {arguments}")
+
+            # Check if tool exists
+            tool = self.tool_registry.get(tool_name)
+            if tool is None:
+                error_msg = (
+                    f"Unknown tool '{tool_name}'. "
+                    f"Available tools: {', '.join(t.name for t in self.tool_registry.list_tools())}"
+                )
+                logger.warning(error_msg)
+                results.append((tool_name, f"ERROR: {error_msg}"))
+                continue
+
+            # Execute tool with retries
+            for attempt in range(self.max_tool_retries + 1):
+                try:
+                    result = await self.tool_registry.execute(
+                        tool_name,
+                        arguments,
+                        timeout=self.tool_timeout,
+                    )
+                    results.append((tool_name, result))
+                    if self.verbose:
+                        logger.info(
+                            f"Tool '{tool_name}' completed successfully on attempt {attempt + 1}"
+                        )
+                    break  # Success
+
+                except TimeoutError:
+                    # Timeout errors are not retried
+                    error_msg = f"Tool '{tool_name}' timed out after {self.tool_timeout}s"
+                    logger.error(error_msg)
+                    results.append((tool_name, f"ERROR: {error_msg}"))
+                    break
+
+                except Exception as e:
+                    if attempt < self.max_tool_retries:
+                        # Retry on transient failures
+                        if self.verbose:
+                            logger.warning(
+                                f"Tool '{tool_name}' failed on attempt {attempt + 1}/{self.max_tool_retries + 1}: {e}"
+                            )
+                        await asyncio.sleep(0.5 * (attempt + 1))  # Exponential backoff
+                        continue
+                    else:
+                        # Final attempt failed
+                        error_msg = f"Tool '{tool_name}' failed after {self.max_tool_retries + 1} attempts: {type(e).__name__}: {e}"
+                        logger.error(error_msg, exc_info=True)
+                        results.append((tool_name, f"ERROR: {error_msg}"))
+
+        return results
+
+    async def _execute_leaf_async(
+        self, task: str, context: RLMContext
+    ) -> Output:
+        """Execute leaf task with iterative tool calling support.
+
+        Overrides parent AsyncRecursiveEngine._execute_leaf_async to add
+        tool calling support. If the LLM returns tool_calls, execute them
+        and inject results back into the conversation until LLM returns
+        a final answer without tool calls.
+
+        Args:
+            task: Task description
+            context: Current execution context
+
+        Returns:
+            Final Output after tool calling loop completes
+
+        Raises:
+            ExecutionError: If LLM call fails
+        """
+        if self.verbose:
+            logger.info(f"[Depth {context.depth}] Executing leaf task with tools: {task}")
+
+        # Get the agent for this task
+        agent = self.agents.get(context.active_agent or "default", self.llm)
+
+        # Build conversation history
+        inputs: list[Input] = [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant. Use tools when needed to answer questions.",
+            },
+            {"role": "user", "content": task},
+        ]
+
+        # Iterative tool calling loop
+        max_iterations = 5  # Prevent infinite loops
+        result: Output | None = None
+
+        for iteration in range(max_iterations):
+            if self.verbose:
+                logger.info(
+                    f"[Depth {context.depth}] Tool calling iteration {iteration + 1}/{max_iterations}"
+                )
+
+            # Call LLM
+            try:
+                async with self._semaphore:
+                    result = await agent(inputs, {"mode": "worker"})
+            except Exception as e:
+                logger.error(f"LLM call failed: {e}", exc_info=True)
+                raise ExecutionError(f"LLM call failed for task: {task!r}") from e
+
+            # Check if LLM requested tool calls
+            tool_calls = result.get("tool_calls", [])
+            if not tool_calls:
+                # No tool calls - return final answer
+                result["metadata"]["depth"] = context.depth
+                result["metadata"]["task_id"] = context.task_id
+                result["metadata"]["tool_iterations"] = iteration
+                return result
+
+            # Execute requested tools
+            tool_results = await self._execute_tool_calls(tool_calls)
+
+            # Inject tool results into conversation
+            # Add assistant's tool call request
+            inputs.append({
+                "role": "assistant",
+                "content": result.get("content", ""),  # May be empty for pure tool calls
+            })
+
+            # Add tool results as user messages
+            tool_results_text = "\n\n".join(
+                f"Tool: {name}\nResult: {result_str}"
+                for name, result_str in tool_results
+            )
+            inputs.append({
+                "role": "user",
+                "content": f"Tool results:\n{tool_results_text}\n\nPlease use these results to answer the original question.",
+            })
+
+        # Max iterations reached - return last response
+        if result is None:
+            raise ExecutionError(f"Tool calling loop failed to produce result for task: {task!r}")
+
+        logger.warning(
+            f"Max tool calling iterations ({max_iterations}) reached for task: {task}"
+        )
+        result["metadata"]["depth"] = context.depth
+        result["metadata"]["task_id"] = context.task_id
+        result["metadata"]["tool_iterations"] = max_iterations
+        result["metadata"]["max_iterations_reached"] = True
+        return result
+
+
+__all__ = ["Tool", "ToolRegistry", "ToolCallingEngine"]
