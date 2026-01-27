@@ -27,15 +27,32 @@ class Item(TypedDict, total=False):
     content: Any
 
 
+class ToolCall(TypedDict):
+    """Tool call request from LLM.
+
+    Represents a request from the LLM to execute an external tool.
+    Used in tool calling workflows where the LLM can request function execution.
+
+    Fields:
+        name: Tool identifier (must match registered tool name)
+        arguments: Dict of parameter values matching tool's JSON Schema
+    """
+
+    name: str
+    arguments: dict[str, Any]
+
+
 class Output(TypedDict):
     """OpenResponses standard output.
 
     Standardized response format from LLM calls.
+    Extended to support tool calling workflows via optional tool_calls field.
     """
 
     content: str
     metadata: dict[str, Any]
     sub_results: NotRequired[list[Output]]  # Optional, for nested results
+    tool_calls: NotRequired[list[ToolCall]]  # Optional, for tool calling
 
 
 class LLMCaller(Protocol):
@@ -160,6 +177,7 @@ __all__ = [
     "Input",
     "Item",
     "Output",
+    "ToolCall",
     "LLMCaller",
     "AsyncLLMCaller",
     "AsyncToolCaller",
