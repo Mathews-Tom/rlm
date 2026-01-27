@@ -1228,6 +1228,14 @@ source = { virtual = "." }
 cache = [
     { name = "redis" },
     { name = "redisvl" },
+]
+cache-l2 = [
+    { name = "redis" },
+    { name = "redisvl" },
+]
+cache-l2-local = [
+    { name = "redis" },
+    { name = "redisvl" },
     { name = "sentence-transformers" },
 ]
 dev = [
@@ -1248,6 +1256,14 @@ observability = [
 
 [package.metadata.requires-dev]
 cache = [
+    { name = "redis", specifier = ">=5.0.0" },
+    { name = "redisvl", specifier = ">=0.3.0" },
+]
+cache-l2 = [
+    { name = "redis", specifier = ">=5.0.0" },
+    { name = "redisvl", specifier = ">=0.3.0" },
+]
+cache-l2-local = [
     { name = "redis", specifier = ">=5.0.0" },
     { name = "redisvl", specifier = ">=0.3.0" },
     { name = "sentence-transformers", specifier = ">=5.2.2" },
