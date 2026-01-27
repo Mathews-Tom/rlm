@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal, NotRequired, Protocol, TypedDict, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import AsyncGenerator, Awaitable
 
 
 # OpenResponses Protocol Types
@@ -27,15 +27,32 @@ class Item(TypedDict, total=False):
     content: Any
 
 
+class ToolCall(TypedDict):
+    """Tool call request from LLM.
+
+    Represents a request from the LLM to execute an external tool.
+    Used in tool calling workflows where the LLM can request function execution.
+
+    Fields:
+        name: Tool identifier (must match registered tool name)
+        arguments: Dict of parameter values matching tool's JSON Schema
+    """
+
+    name: str
+    arguments: dict[str, Any]
+
+
 class Output(TypedDict):
     """OpenResponses standard output.
 
     Standardized response format from LLM calls.
+    Extended to support tool calling workflows via optional tool_calls field.
     """
 
     content: str
     metadata: dict[str, Any]
     sub_results: NotRequired[list[Output]]  # Optional, for nested results
+    tool_calls: NotRequired[list[ToolCall]]  # Optional, for tool calling
 
 
 class LLMCaller(Protocol):
@@ -82,6 +99,60 @@ class AsyncLLMCaller(Protocol):
 
         Returns:
             Awaitable Output dict with content and metadata
+        """
+        ...
+
+
+class AsyncStreamingLLMCaller(Protocol):
+    """Async protocol for streaming LLM backends.
+
+    Extends AsyncLLMCaller with token-level streaming support.
+    LLMs that support streaming can yield tokens as they're generated
+    for sub-500ms time-to-first-token (TTFT).
+
+    The stream() method returns an AsyncGenerator that yields token strings
+    as they arrive from the LLM. Implementations should buffer partial tokens
+    and yield complete words or phrases for better UX.
+
+    Example:
+        >>> class StreamingLLM:
+        ...     async def __call__(self, inputs, context) -> Output:
+        ...         return {"content": "full response", "metadata": {}}
+        ...
+        ...     async def stream(self, inputs, context) -> AsyncGenerator[str, None]:
+        ...         for token in ["Hello", " ", "world", "!"]:
+        ...             yield token
+    """
+
+    def __call__(
+        self, inputs: list[Input], context: dict[str, Any]
+    ) -> Awaitable[Output]:
+        """Call LLM asynchronously and return full output (batch mode).
+
+        Args:
+            inputs: List of Input messages (role, content)
+            context: Metadata (mode, schema, etc.)
+
+        Returns:
+            Awaitable Output dict with content and metadata
+        """
+        ...
+
+    def stream(
+        self, inputs: list[Input], context: dict[str, Any]
+    ) -> "AsyncGenerator[str, None]":
+        """Stream tokens from LLM as they're generated.
+
+        Args:
+            inputs: List of Input messages (role, content)
+            context: Metadata (mode, schema, etc.)
+
+        Yields:
+            Token strings as they arrive from LLM
+
+        Note:
+            Must yield complete Output metadata as final yield or via separate channel.
+            Implementations should catch exceptions and handle partial results gracefully.
         """
         ...
 
@@ -160,8 +231,10 @@ __all__ = [
     "Input",
     "Item",
     "Output",
+    "ToolCall",
     "LLMCaller",
     "AsyncLLMCaller",
+    "AsyncStreamingLLMCaller",
     "AsyncToolCaller",
     "SubTask",
     "PlannerDecision",
