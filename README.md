@@ -451,18 +451,33 @@ See [LICENSE](LICENSE) for details.
 
 ## Citation
 
-If you use RLM in your research, please cite:
+If you use this implementation in your research, please cite both this package and the original paper:
 
 ```bibtex
-@software{rlm2026,
-  title = {RLM: Recursive Language Models},
+@software{llm-recursive2026,
+  title = {llm-recursive: Recursive Language Models Implementation},
   author = {Mathews, Tom},
   year = {2026},
-  url = {https://github.com/Mathews-Tom/rlm}
+  url = {https://github.com/Mathews-Tom/rlm},
+  note = {PyPI: llm-recursive}
+}
+
+@article{zhang2024recursive,
+  title = {Recursive Language Models},
+  author = {Zhang, Alex L. and Kraska, Tim and Khattab, Omar},
+  journal = {arXiv preprint arXiv:2512.24601},
+  year = {2024},
+  url = {https://arxiv.org/abs/2512.24601}
 }
 ```
 
 ## Acknowledgments
+
+This implementation is inspired by the paper **"Recursive Language Models"** by Alex L. Zhang, Tim Kraska, and Omar Khattab (MIT CSAIL):
+
+> Zhang, A. L., Kraska, T., & Khattab, O. (2024). Recursive Language Models. *arXiv preprint arXiv:2512.24601*. https://arxiv.org/abs/2512.24601
+
+The paper introduces the concept of recursive task decomposition for LLMs, enabling models to process inputs beyond context window limits through programmatic examination and recursive self-calls.
 
 Built with modern Python tooling:
 
