@@ -453,6 +453,66 @@ wheels = [
 ]
 
 [[package]]
+name = "llm-recursive"
+version = "0.1.0"
+source = { editable = "." }
+
+[package.optional-dependencies]
+cache = [
+    { name = "redis" },
+    { name = "redisvl" },
+]
+cache-l2 = [
+    { name = "redis" },
+    { name = "redisvl" },
+]
+cache-l2-local = [
+    { name = "redis" },
+    { name = "redisvl" },
+    { name = "sentence-transformers" },
+]
+observability = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "openai" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "python-dotenv" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.20.0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'observability'", specifier = ">=1.20.0" },
+    { name = "redis", marker = "extra == 'cache'", specifier = ">=5.0.0" },
+    { name = "redis", marker = "extra == 'cache-l2'", specifier = ">=5.0.0" },
+    { name = "redis", marker = "extra == 'cache-l2-local'", specifier = ">=5.0.0" },
+    { name = "redisvl", marker = "extra == 'cache'", specifier = ">=0.3.0" },
+    { name = "redisvl", marker = "extra == 'cache-l2'", specifier = ">=0.3.0" },
+    { name = "redisvl", marker = "extra == 'cache-l2-local'", specifier = ">=0.3.0" },
+    { name = "sentence-transformers", marker = "extra == 'cache-l2-local'", specifier = ">=5.2.2" },
+]
+provides-extras = ["cache-l2", "cache-l2-local", "cache", "observability"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.19.1" },
+    { name = "openai", specifier = ">=2.15.0" },
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pytest-asyncio", specifier = ">=1.3.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "ruff", specifier = ">=0.14.14" },
+]
+
+[[package]]
 name = "markupsafe"
 version = "3.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -899,66 +959,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e5/69/882ee5c9d017149285cab114ebeab373308ef0f874fcdac9beb90e0ac4da/ply-3.11.tar.gz", hash = "sha256:00c7c1aaa88358b9c765b6d3000c6eec0ba42abca5351b095321aef446081da3", size = 159130 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a3/58/35da89ee790598a0700ea49b2a66594140f44dec458c07e8e3d4979137fc/ply-3.11-py2.py3-none-any.whl", hash = "sha256:096f9b8350b65ebd2fd1346b12452efe5b9607f7482813ffca50c22722a807ce", size = 49567 },
-]
-
-[[package]]
-name = "py-rlm"
-version = "0.1.0"
-source = { editable = "." }
-
-[package.optional-dependencies]
-cache = [
-    { name = "redis" },
-    { name = "redisvl" },
-]
-cache-l2 = [
-    { name = "redis" },
-    { name = "redisvl" },
-]
-cache-l2-local = [
-    { name = "redis" },
-    { name = "redisvl" },
-    { name = "sentence-transformers" },
-]
-observability = [
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-sdk" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "openai" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "python-dotenv" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.20.0" },
-    { name = "opentelemetry-sdk", marker = "extra == 'observability'", specifier = ">=1.20.0" },
-    { name = "redis", marker = "extra == 'cache'", specifier = ">=5.0.0" },
-    { name = "redis", marker = "extra == 'cache-l2'", specifier = ">=5.0.0" },
-    { name = "redis", marker = "extra == 'cache-l2-local'", specifier = ">=5.0.0" },
-    { name = "redisvl", marker = "extra == 'cache'", specifier = ">=0.3.0" },
-    { name = "redisvl", marker = "extra == 'cache-l2'", specifier = ">=0.3.0" },
-    { name = "redisvl", marker = "extra == 'cache-l2-local'", specifier = ">=0.3.0" },
-    { name = "sentence-transformers", marker = "extra == 'cache-l2-local'", specifier = ">=5.2.2" },
-]
-provides-extras = ["cache-l2", "cache-l2-local", "cache", "observability"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.19.1" },
-    { name = "openai", specifier = ">=2.15.0" },
-    { name = "pytest", specifier = ">=9.0.2" },
-    { name = "pytest-asyncio", specifier = ">=1.3.0" },
-    { name = "pytest-cov", specifier = ">=7.0.0" },
-    { name = "python-dotenv", specifier = ">=1.2.1" },
-    { name = "ruff", specifier = ">=0.14.14" },
 ]
 
 [[package]]
