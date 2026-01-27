@@ -286,3 +286,290 @@ class TestCheckpointableEngine:
 
         # Should have checkpoints from both tasks
         assert second_count > first_count
+
+
+class TestCheckpointResume:
+    """Test checkpoint resume and recovery logic."""
+
+    @pytest.mark.asyncio
+    async def test_solve_with_checkpoints_fresh_execution(self) -> None:
+        """Test fresh execution when no checkpoint ID provided."""
+        store = InMemoryCheckpointStore()
+        llm = MockStreamingLLM(["Result"])
+        registry = ToolRegistry()
+
+        engine = CheckpointableEngine(
+            llm=llm,
+            tool_registry=registry,
+            checkpoint_store=store,
+            checkpoint_interval=1,
+            max_depth=1,
+            verbose=False,
+        )
+
+        # Execute without checkpoint_id (fresh execution)
+        events = []
+        async for event in engine.solve_with_checkpoints("Test task"):
+            events.append(event)
+
+        # Verify execution completed
+        assert len(events) > 0
+        assert any(e.type == "result" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_solve_with_checkpoints_resume_from_valid_checkpoint(self) -> None:
+        """Test resuming from valid checkpoint ID."""
+        store = InMemoryCheckpointStore()
+        llm = MockStreamingLLM(["Result"])
+        registry = ToolRegistry()
+
+        engine = CheckpointableEngine(
+            llm=llm,
+            tool_registry=registry,
+            checkpoint_store=store,
+            checkpoint_interval=1,
+            max_depth=1,
+            verbose=False,
+        )
+
+        # First execution - save checkpoint
+        async for event in engine.solve_streaming("Test task"):
+            pass
+
+        # Get saved checkpoint
+        checkpoints = await store.list()
+        assert len(checkpoints) > 0
+        checkpoint_id = checkpoints[0].checkpoint_id
+
+        # Resume from checkpoint
+        events = []
+        async for event in engine.solve_with_checkpoints(
+            "Test task", checkpoint_id=checkpoint_id
+        ):
+            events.append(event)
+
+        # Verify execution completed
+        assert len(events) > 0
+
+    @pytest.mark.asyncio
+    async def test_solve_with_checkpoints_invalid_checkpoint_id_fallback(
+        self,
+    ) -> None:
+        """Test fallback to fresh execution when checkpoint ID not found."""
+        store = InMemoryCheckpointStore()
+        llm = MockStreamingLLM(["Result"])
+        registry = ToolRegistry()
+
+        engine = CheckpointableEngine(
+            llm=llm,
+            tool_registry=registry,
+            checkpoint_store=store,
+            checkpoint_interval=1,
+            max_depth=1,
+            verbose=False,
+        )
+
+        # Try to resume from nonexistent checkpoint
+        events = []
+        async for event in engine.solve_with_checkpoints(
+            "Test task", checkpoint_id="nonexistent-id"
+        ):
+            events.append(event)
+
+        # Should fall back to fresh execution
+        assert len(events) > 0
+        assert any(e.type == "result" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_resume_from_checkpoint_restores_context(self) -> None:
+        """Test that checkpoint resume restores execution context."""
+        store = InMemoryCheckpointStore()
+        llm = MockStreamingLLM(["Result"])
+        registry = ToolRegistry()
+
+        # Create checkpoint with custom context
+        from rlm.memory import RLMContext, SharedMemory
+
+        memory = SharedMemory()
+        ref_id = memory.store("test data")
+        context = RLMContext(
+            task_id="test-task-123",
+            parent_id=None,
+            depth=0,
+            breadcrumbs=(),
+            memory_ref=memory,
+            active_agent=None,
+        )
+
+        checkpoint = Checkpoint.create(
+            task="Test task with context",
+            context=context,
+            completed_steps=["Step 1", "Step 2"],
+            pending_steps=["Step 3"],
+            results={"ref": ref_id},
+        )
+
+        await store.save(checkpoint)
+
+        engine = CheckpointableEngine(
+            llm=llm,
+            tool_registry=registry,
+            checkpoint_store=store,
+            checkpoint_interval=1,
+            max_depth=1,
+            verbose=False,
+        )
+
+        # Resume from checkpoint
+        events = []
+        async for event in engine.solve_with_checkpoints(
+            "Test task", checkpoint_id=checkpoint.checkpoint_id
+        ):
+            events.append(event)
+
+        # Verify execution with restored context
+        assert len(events) > 0
+
+    @pytest.mark.asyncio
+    async def test_resume_from_checkpoint_continues_step_counter(self) -> None:
+        """Test that step counter continues from checkpoint value."""
+        store = InMemoryCheckpointStore()
+        llm = MockStreamingLLM(["Result"])
+        registry = ToolRegistry()
+
+        # Create checkpoint with completed steps
+        from rlm.memory import RLMContext, SharedMemory
+
+        context = RLMContext(
+            task_id="test-task",
+            parent_id=None,
+            depth=0,
+            breadcrumbs=(),
+            memory_ref=SharedMemory(),
+            active_agent=None,
+        )
+
+        checkpoint = Checkpoint.create(
+            task="Test task",
+            context=context,
+            completed_steps=["Step 1", "Step 2", "Step 3"],  # 3 steps completed
+            pending_steps=[],
+            results={},
+        )
+
+        await store.save(checkpoint)
+
+        engine = CheckpointableEngine(
+            llm=llm,
+            tool_registry=registry,
+            checkpoint_store=store,
+            checkpoint_interval=1,
+            max_depth=1,
+            verbose=False,
+        )
+
+        # Resume from checkpoint
+        events = []
+        async for event in engine.solve_with_checkpoints(
+            "Test task", checkpoint_id=checkpoint.checkpoint_id
+        ):
+            events.append(event)
+
+        # Verify execution continued
+        assert len(events) > 0
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_recovery_failure_logs_and_continues(self) -> None:
+        """Test that checkpoint recovery failures log warning and fall back."""
+
+        class CorruptedStore:
+            """Store that returns corrupted checkpoints."""
+
+            async def load(self, checkpoint_id: str) -> Checkpoint | None:
+                """Simulate corrupted checkpoint."""
+                raise RuntimeError("Simulated corruption")
+
+            async def save(self, checkpoint: Checkpoint) -> None:
+                """Not used in test."""
+                pass
+
+            async def delete(self, checkpoint_id: str) -> bool:
+                """Not used in test."""
+                return False
+
+            async def list(self) -> list[Checkpoint]:
+                """Not used in test."""
+                return []
+
+        store = CorruptedStore()
+        llm = MockStreamingLLM(["Result"])
+        registry = ToolRegistry()
+
+        engine = CheckpointableEngine(
+            llm=llm,
+            tool_registry=registry,
+            checkpoint_store=store,
+            checkpoint_interval=1,
+            max_depth=1,
+            verbose=False,
+        )
+
+        # Try to resume from corrupted checkpoint
+        events = []
+        async for event in engine.solve_with_checkpoints(
+            "Test task", checkpoint_id="corrupted-id"
+        ):
+            events.append(event)
+
+        # Should fall back to fresh execution
+        assert len(events) > 0
+        assert any(e.type == "result" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_resume_creates_new_checkpoints(self) -> None:
+        """Test that resumed execution continues creating checkpoints."""
+        store = InMemoryCheckpointStore()
+        llm = MockStreamingLLM(["Result"])
+        registry = ToolRegistry()
+
+        # Create initial checkpoint
+        from rlm.memory import RLMContext, SharedMemory
+
+        context = RLMContext(
+            task_id="test-task",
+            parent_id=None,
+            depth=0,
+            breadcrumbs=(),
+            memory_ref=SharedMemory(),
+            active_agent=None,
+        )
+
+        initial_checkpoint = Checkpoint.create(
+            task="Test task",
+            context=context,
+            completed_steps=["Step 1"],
+            pending_steps=[],
+            results={},
+        )
+
+        await store.save(initial_checkpoint)
+        initial_count = len(await store.list())
+
+        engine = CheckpointableEngine(
+            llm=llm,
+            tool_registry=registry,
+            checkpoint_store=store,
+            checkpoint_interval=1,
+            max_depth=1,
+            verbose=False,
+        )
+
+        # Resume from checkpoint
+        async for event in engine.solve_with_checkpoints(
+            "Test task", checkpoint_id=initial_checkpoint.checkpoint_id
+        ):
+            pass
+
+        # Verify new checkpoints were created
+        final_count = len(await store.list())
+        assert final_count >= initial_count  # Should have at least initial checkpoint

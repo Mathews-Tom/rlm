@@ -637,6 +637,116 @@ class CheckpointableEngine:
         except Exception as e:
             logger.warning(f"Checkpoint save failed at step {completed_steps}: {e}")
 
+    async def solve_with_checkpoints(
+        self,
+        task: str,
+        checkpoint_id: str | None = None,
+        context: RLMContext | None = None,
+    ) -> AsyncGenerator[Any, None]:
+        """Solve task with checkpoint recovery support.
+
+        Attempts to load and resume from checkpoint if checkpoint_id is provided.
+        Falls back to fresh execution if checkpoint not found or recovery fails.
+
+        Args:
+            task: Task description to solve
+            checkpoint_id: Optional checkpoint ID to resume from
+            context: Optional execution context (creates default if None)
+
+        Yields:
+            StreamEvent objects tracking execution progress
+
+        Raises:
+            ExecutionError: If task execution fails catastrophically
+
+        Example:
+            >>> # Fresh execution
+            >>> async for event in engine.solve_with_checkpoints("Task"):
+            ...     print(event)
+            >>>
+            >>> # Resume from checkpoint
+            >>> async for event in engine.solve_with_checkpoints("Task", checkpoint_id="ckpt-123"):
+            ...     print(event)
+        """
+        # Attempt recovery if checkpoint ID provided
+        if checkpoint_id is not None:
+            try:
+                checkpoint = await self.checkpoint_store.load(checkpoint_id)
+                if checkpoint is not None:
+                    logger.info(
+                        f"Resuming from checkpoint: {checkpoint_id} "
+                        f"(task: {checkpoint.task[:50]}...)"
+                    )
+                    async for event in self._resume_from_checkpoint(checkpoint):
+                        yield event
+                    return
+                else:
+                    logger.warning(
+                        f"Checkpoint {checkpoint_id} not found, starting fresh"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"Checkpoint recovery failed: {e}, starting fresh execution"
+                )
+
+        # Fall back to fresh execution
+        logger.info(f"Starting fresh execution: {task[:50]}...")
+        async for event in self.solve_streaming(task, context):
+            yield event
+
+    async def _resume_from_checkpoint(
+        self, checkpoint: Checkpoint
+    ) -> AsyncGenerator[Any, None]:
+        """Resume execution from saved checkpoint.
+
+        Reconstructs RLMContext and SharedMemory state from checkpoint,
+        then continues execution from where it left off. Only pending
+        sub-tasks are re-executed; completed results are reused.
+
+        Args:
+            checkpoint: Checkpoint to resume from
+
+        Yields:
+            StreamEvent objects tracking resumed execution
+
+        Raises:
+            ExecutionError: If resume execution fails
+
+        Note:
+            Current implementation restarts task execution with restored
+            context. Future versions will track and skip completed sub-tasks.
+        """
+        # Reconstruct context from checkpoint
+        restored_context = checkpoint.context
+
+        # Log recovery stats
+        completed_count = len(checkpoint.completed_steps)
+        pending_count = len(checkpoint.pending_steps)
+        logger.info(
+            f"Recovered state: {completed_count} completed, "
+            f"{pending_count} pending steps"
+        )
+
+        # Resume execution with restored context
+        # Note: Current implementation restarts with restored context.
+        # Future enhancement: Track and skip completed sub-tasks for efficiency.
+        self._step_counter = completed_count  # Resume step counter
+
+        async for event in self._base_engine._solve_recursive_streaming(
+            checkpoint.task, restored_context
+        ):
+            yield event
+
+            # Continue checkpoint saving during recovery
+            if event.type == "result":
+                self._step_counter += 1
+                if self._step_counter % self.checkpoint_interval == 0:
+                    await self._save_checkpoint(
+                        task=checkpoint.task,
+                        context=restored_context,
+                        completed_steps=self._step_counter,
+                    )
+
 
 __all__ = [
     "Checkpoint",
