@@ -356,18 +356,10 @@ class StreamingEngine(ToolCallingEngine):
             )
 
         # Execute with streaming
-        try:
-            async for event in self._solve_recursive_streaming(task, context):
-                yield event
-        except Exception as e:
-            # Emit error event for unhandled exceptions
-            yield StreamEvent.error_event(
-                error=str(e),
-                error_type=type(e).__name__,
-                task_id=context.task_id,
-                depth=context.depth,
-            )
-            raise
+        # Note: Exceptions propagate without additional error events.
+        # Error events are emitted at the source where errors occur.
+        async for event in self._solve_recursive_streaming(task, context):
+            yield event
 
     async def _solve_recursive_streaming(
         self, task: str, context: RLMContext
@@ -414,14 +406,9 @@ class StreamingEngine(ToolCallingEngine):
                 async for event in self._execute_leaf_streaming(task, context):
                     yield event
 
-        except Exception as e:
-            # Emit error event
-            yield StreamEvent.error_event(
-                error=str(e),
-                error_type=type(e).__name__,
-                task_id=context.task_id,
-                depth=context.depth,
-            )
+        except Exception:
+            # Let exception propagate without emitting additional error events
+            # Error event is emitted at the source (e.g., _execute_leaf_with_streaming)
             raise
 
     async def _execute_decompose_streaming(
@@ -572,13 +559,9 @@ class StreamingEngine(ToolCallingEngine):
                     depth=context.depth,
                 )
 
-        except Exception as e:
-            yield StreamEvent.error_event(
-                error=str(e),
-                error_type=type(e).__name__,
-                task_id=context.task_id,
-                depth=context.depth,
-            )
+        except Exception:
+            # Let exception propagate without emitting additional error events
+            # Error event is emitted at the source (e.g., _execute_leaf_with_streaming)
             raise
 
     async def _execute_leaf_with_streaming(
