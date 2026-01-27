@@ -16,6 +16,10 @@ dev = [
     "python-dotenv>=1.2.1",
     "ruff>=0.14.14",
 ]
+cache = [
+    "redis>=5.0.0",
+    "redisvl>=0.3.0",
+]
 
 [tool.pyright]
 pythonVersion = "3.12"

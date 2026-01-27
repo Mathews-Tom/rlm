@@ -242,15 +242,15 @@ async def test_verbose_logging(capsys: Any) -> None:
     llm = MockAsyncLLM()
     engine = CachedAsyncEngine(llm=llm, max_depth=1, l1_size=100, verbose=True)
 
-    # First call - should log MISS
+    # First call - should log L1 MISS
     await engine.solve("Test task")
     captured = capsys.readouterr()
-    assert "[cache] MISS" in captured.out
+    assert "[cache] L1 MISS" in captured.out
 
-    # Second call - should log HIT
+    # Second call - should log L1 HIT
     await engine.solve("Test task")
     captured = capsys.readouterr()
-    assert "[cache] HIT" in captured.out
+    assert "[cache] L1 HIT" in captured.out
 
 
 @pytest.mark.asyncio
