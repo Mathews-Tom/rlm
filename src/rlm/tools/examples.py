@@ -541,14 +541,15 @@ def create_current_time_tool() -> Tool:
             raise ValueError("Only UTC timezone is supported in this example")
 
         try:
-            now = datetime.utcnow()
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
 
             result: dict[str, Any] = {
                 "timezone": "UTC",
             }
 
             if format_type == "iso":
-                result["datetime"] = now.isoformat() + "Z"
+                result["datetime"] = now.isoformat()
                 result["date"] = now.date().isoformat()
                 result["time"] = now.time().isoformat()
             else:  # unix
