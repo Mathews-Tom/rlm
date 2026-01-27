@@ -1,5 +1,7 @@
 # RLM - Recursive Language Models
 
+> **Think Recursively, Solve Intelligently - Emphasizes the intelligent decision-making (EXECUTE vs RECURSE)**
+
 A Python framework for building intelligent, recursive task decomposition systems powered by Large Language Models (LLMs).
 
 ## Overview
@@ -138,36 +140,29 @@ See [examples/README.md](examples/README.md) for detailed documentation.
 
 ### Core Components
 
-```plaintext
-┌─────────────────────────────────────────────────────┐
-│                  RecursiveEngine                    │
-│  ┌───────────────────────────────────────────────┐  │
-│  │  Planner: Should I EXECUTE or RECURSE?        │  │
-│  └───────────────────────────────────────────────┘  │
-│                       │                             │
-│           ┌───────────┴───────────┐                 │
-│           │                       │                 │
-│      ┌────▼────┐            ┌─────▼─────┐           │
-│      │ EXECUTE │            │  RECURSE  │           │
-│      │ Leaf    │            │ Sub-tasks │           │
-│      │ Task    │            └─────┬─────┘           │
-│      └────┬────┘                  │                 │
-│           │               ┌───────┴────────┐        │
-│           │               │                │        │
-│           │          ┌────▼───┐       ┌────▼───┐    │
-│           │          │ Task 1 │       │ Task 2 │    │
-│           │          │(Agent1)│       │(Agent2)│    │
-│           │          └────┬───┘       └────┬───┘    │
-│           │               │                │        │
-│           │               └────────┬───────┘        │
-│           │                        │                │
-│           │                   ┌────▼────┐           │
-│           │                   │Synthesis│           │
-│           │                   └────┬────┘           │
-│           │                        │                │
-│           └────────────────────────┴────────────────┤
-│                         Result                      │
-└─────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    Start([Task Input]) --> Planner{Planner<br/>EXECUTE or RECURSE?}
+
+    Planner -->|EXECUTE| Execute[Execute Atomically<br/>Leaf Task]
+    Planner -->|RECURSE| Decompose[Decompose into Sub-tasks]
+
+    Decompose --> Task1[Task 1<br/>Agent 1]
+    Decompose --> Task2[Task 2<br/>Agent 2]
+    Decompose --> TaskN[Task N<br/>Agent N]
+
+    Task1 --> Synthesis[Synthesize Results]
+    Task2 --> Synthesis
+    TaskN --> Synthesis
+
+    Execute --> Result([Final Result])
+    Synthesis --> Result
+
+    style Planner fill:#f9f,stroke:#333,stroke-width:2px
+    style Execute fill:#bfb,stroke:#333,stroke-width:2px
+    style Decompose fill:#bbf,stroke:#333,stroke-width:2px
+    style Synthesis fill:#fbb,stroke:#333,stroke-width:2px
+    style Result fill:#bfb,stroke:#333,stroke-width:3px
 ```
 
 ### Key Concepts
