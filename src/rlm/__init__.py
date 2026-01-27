@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import rlm.async_types as async_types
+import rlm.types as rlm_types
 from rlm.engine import RecursiveEngine
 from rlm.exceptions import (
     ExecutionError,
@@ -20,6 +22,12 @@ from rlm.types import (
     TraceObject,
 )
 
+AsyncInput = async_types.AsyncInput
+AsyncItem = async_types.AsyncItem
+AsyncOutput = async_types.AsyncOutput
+AsyncLLMCaller = rlm_types.AsyncLLMCaller
+AsyncToolCaller = rlm_types.AsyncToolCaller
+
 __all__ = [
     "RecursiveEngine",
     "RLMContext",
@@ -28,6 +36,11 @@ __all__ = [
     "Output",
     "Item",
     "LLMCaller",
+    "AsyncLLMCaller",
+    "AsyncToolCaller",
+    "AsyncInput",
+    "AsyncItem",
+    "AsyncOutput",
     "SubTask",
     "PlannerDecision",
     "TraceObject",

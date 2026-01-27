@@ -28,11 +28,14 @@ def openai_planner(inputs: list[Input], context: dict[str, Any]) -> Output:
 
     client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    messages = [{"role": msg["role"], "content": msg["content"]} for msg in inputs]
+    # Type messages explicitly to match OpenAI's ChatCompletionMessageParam
+    messages: list[dict[str, str]] = [
+        {"role": msg["role"], "content": msg["content"]} for msg in inputs
+    ]
 
     response = client.chat.completions.create(
         model="gpt-4",
-        messages=messages,
+        messages=messages,  # type: ignore[arg-type]
         temperature=0.7,
     )
 
@@ -57,11 +60,14 @@ def openai_worker(inputs: list[Input], context: dict[str, Any]) -> Output:
 
     client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    messages = [{"role": msg["role"], "content": msg["content"]} for msg in inputs]
+    # Type messages explicitly to match OpenAI's ChatCompletionMessageParam
+    messages: list[dict[str, str]] = [
+        {"role": msg["role"], "content": msg["content"]} for msg in inputs
+    ]
 
     response = client.chat.completions.create(
         model="gpt-3.5-turbo",
-        messages=messages,
+        messages=messages,  # type: ignore[arg-type]
         temperature=0.7,
     )
 

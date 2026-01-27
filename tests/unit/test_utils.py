@@ -118,7 +118,9 @@ def test_validate_planner_decision_missing_subtasks() -> None:
 
 def test_validate_planner_decision_empty_subtasks() -> None:
     """Test error for empty sub_tasks list."""
-    data = {
+    from typing import Any
+
+    data: dict[str, Any] = {
         "decision": "RECURSE",
         "thoughts": "Complex task",
         "sub_tasks": [],

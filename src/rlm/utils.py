@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, cast
 
 from rlm.exceptions import InvalidJSONError
 from rlm.types import TraceObject
@@ -36,12 +36,13 @@ def safe_parse_json(content: str) -> dict[str, Any]:
 
     try:
         # Use json.loads (safe), never eval() (dangerous)
-        data = json.loads(content)
+        data: Any = json.loads(content)
 
         if not isinstance(data, dict):
             raise InvalidJSONError(f"Expected dict, got {type(data).__name__}")
 
-        return data
+        # Type cast: after isinstance check, data is known to be dict
+        return cast(dict[str, Any], data)
     except json.JSONDecodeError as e:
         raise InvalidJSONError(f"Failed to parse JSON: {e}") from e
 

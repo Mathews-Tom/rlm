@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 import pytest
 
@@ -23,7 +24,7 @@ pytestmark = [
 
 
 @pytest.fixture
-def openai_engine():
+def openai_engine() -> Any:
     """Create RecursiveEngine with OpenAI backend."""
     try:
         from openai import OpenAI
@@ -35,9 +36,9 @@ def openai_engine():
 
     client = OpenAI()
 
-    def openai_llm(inputs: list[Input], context: dict) -> Output:
+    def openai_llm(inputs: list[Input], context: dict[str, Any]) -> Output:
         # Convert Input TypedDict to OpenAI message format
-        from typing import Any, cast
+        from typing import cast
 
         messages: list[dict[str, Any]] = [
             {"role": inp["role"], "content": inp["content"]} for inp in inputs
@@ -68,7 +69,7 @@ def openai_engine():
     return RecursiveEngine(llm=openai_llm, max_depth=3, verbose=True)
 
 
-def test_simple_execution(openai_engine):
+def test_simple_execution(openai_engine: Any) -> None:
     """Test simple task execution with real OpenAI API."""
     logger.info("=" * 60)
     logger.info("TEST: Simple Execution (EXECUTE decision)")
@@ -86,7 +87,7 @@ def test_simple_execution(openai_engine):
     assert "4" in result["content"]
 
 
-def test_recursive_task(openai_engine):
+def test_recursive_task(openai_engine: Any) -> None:
     """Test recursive task decomposition with real API."""
     logger.info("=" * 60)
     logger.info("TEST: Recursive Task (RECURSE with sub-tasks)")
@@ -107,7 +108,7 @@ def test_recursive_task(openai_engine):
     assert "recurs" in content_lower or "decompos" in content_lower
 
 
-def test_metadata_tracking(openai_engine):
+def test_metadata_tracking(openai_engine: Any) -> None:
     """Test that metadata is tracked correctly."""
     logger.info("=" * 60)
     logger.info("TEST: Metadata Tracking")
@@ -124,7 +125,7 @@ def test_metadata_tracking(openai_engine):
     assert "task_id" in result["metadata"]
 
 
-def test_depth_limit_enforcement(openai_engine):
+def test_depth_limit_enforcement(openai_engine: Any) -> None:
     """Test that depth limit is enforced with real API.
 
     Creates a task that would naturally recurse deeply,
@@ -155,7 +156,7 @@ def test_depth_limit_enforcement(openai_engine):
     assert "max_depth=3" in str(exc_info.value)
 
 
-def test_large_document_offloading(openai_engine):
+def test_large_document_offloading(openai_engine: Any) -> None:
     """Test variable offloading with large documents using real API.
 
     Verifies that the engine can handle tasks involving large content
