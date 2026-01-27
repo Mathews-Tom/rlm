@@ -15,12 +15,23 @@ from rlm.types import AsyncLLMCaller, Output
 
 # Try to import redisvl for L2 semantic caching
 try:
-    from redisvl.extensions.cache.llm import SemanticCache  # type: ignore
+    from redisvl.extensions.cache.llm import SemanticCache  # type: ignore[import-not-found]
+    from redisvl.utils.vectorize import OpenAITextVectorizer  # type: ignore[import-not-found]
 
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
-    SemanticCache = None  # type: ignore
+    SemanticCache = None
+    OpenAITextVectorizer = None
+
+# Try to import sentence-transformers (optional, heavy dependency)
+try:
+    from redisvl.utils.vectorize import HuggingFaceTextVectorizer
+
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+    HuggingFaceTextVectorizer = None
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +100,8 @@ class CachedAsyncEngine(AsyncRecursiveEngine):
         redis_url: str | None = None,
         cache_threshold: float = 0.85,
         ttl: int = 3600,
+        vectorizer_type: str = "openai",
+        vectorizer_model: str | None = None,
         verbose: bool = False,
     ) -> None:
         """Initialize cached async engine with L1 LRU cache and optional L2 Redis cache.
@@ -110,8 +123,24 @@ class CachedAsyncEngine(AsyncRecursiveEngine):
                 Recommended: 0.80-0.90 for good precision/recall balance
             ttl: Cache entry time-to-live in seconds (default 3600 = 1 hour)
                 After TTL expires, entries are automatically evicted from Redis
+            vectorizer_type: Embedding provider for L2 semantic cache (default "openai")
+                - "openai": OpenAI embeddings (API-based, lightweight, no local model)
+                  Requires OPENAI_API_KEY environment variable
+                  Cost: ~$0.0001 per 1K tokens (text-embedding-3-small)
+                - "huggingface": sentence-transformers (local model, HEAVY ~500MB+)
+                  No API key required, runs offline
+                  Pulls PyTorch/TensorFlow dependencies
+                Ignored if redis_url is None
+            vectorizer_model: Override default model for chosen vectorizer (default None)
+                - For "openai": e.g., "text-embedding-3-small" (default), "text-embedding-3-large"
+                - For "huggingface": e.g., "sentence-transformers/all-MiniLM-L6-v2" (default)
+                If None, uses provider's default model
             verbose: Enable debug logging (default False)
                 Logs cache hits/misses with cache keys and similarity scores
+
+        Raises:
+            RuntimeWarning: If redis_url provided but redisvl not available
+            RuntimeWarning: If L2 cache initialization fails (falls back to L1-only)
         """
         super().__init__(
             llm=llm,
@@ -143,18 +172,59 @@ class CachedAsyncEngine(AsyncRecursiveEngine):
             if not REDIS_AVAILABLE:
                 warnings.warn(
                     "Redis URL provided but redisvl library not available. "
-                    "Install with: uv sync --group cache. "
+                    "Install with: uv sync --group cache-l2. "
                     "Falling back to L1-only caching.",
                     RuntimeWarning,
                     stacklevel=2,
                 )
             else:
                 try:
+                    # Create vectorizer based on type
+                    vectorizer = None
+                    if vectorizer_type == "openai":
+                        # OpenAI embeddings (lightweight, API-based)
+                        if OpenAITextVectorizer is None:
+                            raise ImportError("OpenAITextVectorizer not available in redisvl")
+
+                        vectorizer_kwargs: dict[str, Any] = {}
+                        if vectorizer_model:
+                            vectorizer_kwargs["model"] = vectorizer_model
+                        vectorizer = OpenAITextVectorizer(**vectorizer_kwargs)
+
+                        if self.verbose:
+                            model_name = vectorizer_model or "text-embedding-3-small"
+                            print(f"[cache] Using OpenAI embeddings (model: {model_name})")
+
+                    elif vectorizer_type == "huggingface":
+                        # HuggingFace/sentence-transformers (heavy, local model)
+                        if not SENTENCE_TRANSFORMERS_AVAILABLE:
+                            raise ImportError(
+                                "HuggingFace vectorizer requested but sentence-transformers not available. "
+                                "Install with: uv sync --group cache-l2"
+                            )
+
+                        vectorizer_kwargs = {}
+                        if vectorizer_model:
+                            vectorizer_kwargs["model"] = vectorizer_model
+                        vectorizer = HuggingFaceTextVectorizer(**vectorizer_kwargs)
+
+                        if self.verbose:
+                            model_name = vectorizer_model or "sentence-transformers/all-MiniLM-L6-v2"
+                            print(f"[cache] Using HuggingFace embeddings (model: {model_name})")
+
+                    else:
+                        raise ValueError(
+                            f"Invalid vectorizer_type: {vectorizer_type}. "
+                            f"Must be 'openai' or 'huggingface'"
+                        )
+
+                    # Initialize SemanticCache with vectorizer
                     self._l2_cache = SemanticCache(
                         name="rlm_cache",
                         redis_url=redis_url,
                         distance_threshold=1.0 - cache_threshold,  # Convert similarity to distance
                         ttl=ttl,
+                        vectorizer=vectorizer,
                     )
                     self._l2_enabled = True
 
@@ -323,7 +393,7 @@ class CachedAsyncEngine(AsyncRecursiveEngine):
                             similarity = l2_hit.get("vector_distance", 0.0)
                             print(f"[cache] L2 HIT (similarity: {1.0 - similarity:.3f}) - promoted to L1")
 
-                        return result
+                        return result  # type: ignore[no-any-return]
                     except (json.JSONDecodeError, KeyError, TypeError) as e:
                         logger.warning(f"Failed to parse L2 cached result: {e}")
                         # Fall through to execute task

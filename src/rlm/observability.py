@@ -84,6 +84,8 @@ class InstrumentedAsyncEngine(CachedAsyncEngine):
         redis_url: str | None = None,
         cache_threshold: float = 0.85,
         ttl: int = 3600,
+        vectorizer_type: str = "openai",
+        vectorizer_model: str | None = None,
         enable_tracing: bool = True,
         service_name: str = "py-rlm",
         verbose: bool = False,
@@ -101,6 +103,10 @@ class InstrumentedAsyncEngine(CachedAsyncEngine):
             redis_url: Optional Redis connection URL for L2 cache (default None)
             cache_threshold: Semantic similarity threshold for L2 cache (default 0.85)
             ttl: Cache entry time-to-live in seconds (default 3600)
+            vectorizer_type: Embedding provider for L2 semantic cache (default "openai")
+                See CachedAsyncEngine for details on supported providers
+            vectorizer_model: Override default model for chosen vectorizer (default None)
+                See CachedAsyncEngine for supported models per provider
             enable_tracing: Enable OpenTelemetry tracing (default True)
                 If False, no tracing overhead (behaves like CachedAsyncEngine)
             service_name: Service name for trace identification (default "py-rlm")
@@ -122,6 +128,8 @@ class InstrumentedAsyncEngine(CachedAsyncEngine):
             redis_url=redis_url,
             cache_threshold=cache_threshold,
             ttl=ttl,
+            vectorizer_type=vectorizer_type,
+            vectorizer_model=vectorizer_model,
             verbose=verbose,
         )
         self.enable_tracing = enable_tracing

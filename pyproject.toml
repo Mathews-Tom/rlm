@@ -16,11 +16,32 @@ dev = [
     "python-dotenv>=1.2.1",
     "ruff>=0.14.14",
 ]
+# L1 cache: In-memory LRU cache (zero dependencies, built into CachedAsyncEngine)
+# No dependency group needed - uses stdlib OrderedDict
+
+# L2 cache: Redis semantic similarity cache (lightweight with OpenAI embeddings)
+cache-l2 = [
+    "redis>=5.0.0",
+    "redisvl>=0.3.0",
+    # Uses OpenAI embeddings by default (API-based, no local model)
+    # Requires OPENAI_API_KEY environment variable
+    # Cost: ~$0.0001 per 1K tokens (text-embedding-3-small)
+]
+
+# L2 cache with HuggingFace/sentence-transformers (HEAVY ~500MB+)
+# Only install if you need offline embeddings or don't want to use OpenAI API
+cache-l2-local = [
+    "redis>=5.0.0",
+    "redisvl>=0.3.0",
+    "sentence-transformers>=5.2.2",  # Pulls PyTorch/TensorFlow
+]
+
+# Legacy alias for backward compatibility (now uses OpenAI embeddings)
 cache = [
     "redis>=5.0.0",
     "redisvl>=0.3.0",
-    "sentence-transformers>=5.2.2",
 ]
+
 observability = [
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
