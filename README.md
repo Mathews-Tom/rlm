@@ -2,6 +2,11 @@
 
 > **Think Recursively, Solve Intelligently - Emphasizes the intelligent decision-making (EXECUTE vs RECURSE)**
 
+[![PyPI version](https://badge.fury.io/py/llm-recursive.svg)](https://pypi.org/project/llm-recursive/)
+[![Python versions](https://img.shields.io/pypi/pyversions/llm-recursive.svg)](https://pypi.org/project/llm-recursive/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Downloads](https://pepy.tech/badge/llm-recursive)](https://pepy.tech/project/llm-recursive)
+
 A Python framework for building intelligent, recursive task decomposition systems powered by Large Language Models (LLMs).
 
 ## Overview
@@ -29,20 +34,20 @@ This creates a hierarchical problem-solving approach where complex tasks are aut
 ### From PyPI (Recommended)
 
 ```bash
-pip install rlm
+pip install llm-recursive
 ```
 
 **Optional dependencies:**
 
 ```bash
 # With Redis L2 cache (OpenAI embeddings)
-pip install rlm[cache-l2]
+pip install llm-recursive[cache-l2]
 
 # With observability (OpenTelemetry)
-pip install rlm[observability]
+pip install llm-recursive[observability]
 
 # All extras
-pip install rlm[cache-l2,observability]
+pip install llm-recursive[cache-l2,observability]
 ```
 
 ### From Source
