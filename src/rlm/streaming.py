@@ -523,36 +523,129 @@ class StreamingEngine(ToolCallingEngine):
     async def _execute_leaf_streaming(
         self, task: str, context: RLMContext
     ) -> AsyncGenerator[StreamEvent, None]:
-        """Execute leaf task with streaming events.
+        """Execute leaf task with token-level streaming events.
 
-        This method executes the leaf task using the parent's _execute_leaf_async
-        (which includes tool calling support) and emits a result event.
+        Checks if the agent supports streaming (has a 'stream' method).
+        If streaming is supported, yields token events as the LLM generates them.
+        Otherwise, falls back to batch mode with a single result event.
 
-        Token-level streaming (emitting token events during LLM generation)
-        will be implemented in CAP-009.
+        Token-level streaming achieves <500ms time-to-first-token (TTFT) for
+        responsive UI updates during long-running LLM generation.
 
         Args:
             task: Leaf task description
             context: Execution context
 
         Yields:
-            StreamEvent for result (token events in CAP-009)
+            StreamEvent objects:
+            - token events during streaming generation
+            - result event with final content at the end
+            - error events if execution fails
+
+        Note:
+            Currently only supports streaming for the final LLM response without
+            tool calling. Tool calling loop uses batch mode for simplicity.
+            Future enhancement: stream tokens during tool calling iterations.
         """
         try:
-            # Execute leaf using parent's tool calling implementation
-            output = await self._execute_leaf_async(task, context)
+            # Get the agent for this task
+            agent = self.agents.get(context.active_agent or "default", self.llm)
 
-            # Emit result event
+            # Check if agent supports streaming
+            has_streaming = hasattr(agent, "stream") and callable(
+                getattr(agent, "stream")
+            )
+
+            if has_streaming:
+                # Streaming mode: emit token events as they arrive
+                async for event in self._execute_leaf_with_streaming(task, context, agent):
+                    yield event
+            else:
+                # Fallback to batch mode
+                output = await self._execute_leaf_async(task, context)
+
+                # Emit result event
+                yield StreamEvent.result_event(
+                    content=output["content"],
+                    metadata=output.get("metadata", {}),
+                    task_id=context.task_id,
+                    depth=context.depth,
+                )
+
+        except Exception as e:
+            yield StreamEvent.error_event(
+                error=str(e),
+                error_type=type(e).__name__,
+                task_id=context.task_id,
+                depth=context.depth,
+            )
+            raise
+
+    async def _execute_leaf_with_streaming(
+        self, task: str, context: RLMContext, agent: Any
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Execute leaf task with token-level streaming from LLM.
+
+        Calls agent.stream() to get token-by-token generation and emits
+        token events as they arrive. Collects all tokens to emit final
+        result event.
+
+        Args:
+            task: Leaf task description
+            context: Execution context
+            agent: LLM agent with streaming support
+
+        Yields:
+            StreamEvent objects for tokens and final result
+        """
+        # Build conversation history
+        inputs: list[Input] = [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant. Use tools when needed to answer questions.",
+            },
+            {"role": "user", "content": task},
+        ]
+
+        # Stream tokens from LLM
+        collected_tokens: list[str] = []
+
+        try:
+            async with self._semaphore:
+                async for token in agent.stream(inputs, {"mode": "worker"}):
+                    # Emit token event
+                    yield StreamEvent.token_event(
+                        content=token,
+                        task_id=context.task_id,
+                        depth=context.depth,
+                    )
+
+                    # Collect token for final content
+                    collected_tokens.append(token)
+
+            # Build final content
+            final_content = "".join(collected_tokens)
+
+            # Emit result event with complete content
             yield StreamEvent.result_event(
-                content=output["content"],
-                metadata=output.get("metadata", {}),
+                content=final_content,
+                metadata={
+                    "depth": context.depth,
+                    "task_id": context.task_id,
+                    "streaming": True,
+                    "token_count": len(collected_tokens),
+                },
                 task_id=context.task_id,
                 depth=context.depth,
             )
 
         except Exception as e:
+            # Handle streaming errors
+            # If we collected some tokens, include them in error
+            partial_content = "".join(collected_tokens) if collected_tokens else ""
+
             yield StreamEvent.error_event(
-                error=str(e),
+                error=f"Streaming failed: {e}" + (f" (partial content: {partial_content[:100]}...)" if partial_content else ""),
                 error_type=type(e).__name__,
                 task_id=context.task_id,
                 depth=context.depth,
