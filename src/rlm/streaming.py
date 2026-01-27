@@ -277,7 +277,316 @@ class StreamEvent:
         )
 
 
+from collections.abc import AsyncGenerator
+import uuid
+
+from rlm.exceptions import ExecutionError
+from rlm.memory import RLMContext, SharedMemory
+from rlm.tools import ToolCallingEngine
+from rlm.types import Input, Output
+from rlm.prompts import SYNTHESIZER_SYSTEM_PROMPT
+
+
+class StreamingEngine(ToolCallingEngine):
+    """Async recursive engine with streaming event emission.
+
+    Extends ToolCallingEngine to emit real-time progress via AsyncGenerator
+    of StreamEvent objects. Events are emitted for planning decisions, LLM
+    tokens, sub-task results, and errors.
+
+    Events enable progressive UI updates and real-time user feedback during
+    long-running task execution.
+
+    Example:
+        >>> engine = StreamingEngine(
+        ...     llm=my_llm,
+        ...     tool_registry=registry,
+        ...     max_depth=3
+        ... )
+        >>>
+        >>> async for event in engine.solve_streaming("Complex task"):
+        ...     if event.type == "token":
+        ...         print(event.data["content"], end="", flush=True)
+        ...     elif event.type == "result":
+        ...         print(f"\\nCompleted: {event.data['content']}")
+    """
+
+    async def solve_streaming(
+        self, task: str, context: RLMContext | None = None
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Solve task with streaming events emitted during execution.
+
+        Yields StreamEvent objects as execution progresses:
+        - plan: After planning decision (execute vs recurse)
+        - token: During LLM generation (if LLM supports streaming)
+        - result: When sub-tasks or leaf tasks complete
+        - error: When execution errors occur
+
+        Args:
+            task: Task description to solve
+            context: Optional execution context (creates default if None)
+
+        Yields:
+            StreamEvent objects tracking execution progress
+
+        Raises:
+            ExecutionError: If task execution fails catastrophically
+
+        Example:
+            >>> async for event in engine.solve_streaming("Summarize article"):
+            ...     match event.type:
+            ...         case "plan":
+            ...             print(f"Planning: {event.data['decision']}")
+            ...         case "token":
+            ...             print(event.data["content"], end="")
+            ...         case "result":
+            ...             print(f"Result: {event.data['content']}")
+            ...         case "error":
+            ...             print(f"Error: {event.data['error']}")
+        """
+        # Create default context if not provided
+        if context is None:
+            context = RLMContext(
+                task_id=str(uuid.uuid4()),
+                parent_id=None,
+                depth=0,
+                breadcrumbs=(),
+                memory_ref=SharedMemory(),
+                active_agent=None,
+            )
+
+        # Execute with streaming
+        try:
+            async for event in self._solve_recursive_streaming(task, context):
+                yield event
+        except Exception as e:
+            # Emit error event for unhandled exceptions
+            yield StreamEvent.error_event(
+                error=str(e),
+                error_type=type(e).__name__,
+                task_id=context.task_id,
+                depth=context.depth,
+            )
+            raise
+
+    async def _solve_recursive_streaming(
+        self, task: str, context: RLMContext
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Recursively solve task with streaming events.
+
+        Internal method that handles the recursive decomposition and execution
+        with event emission at each step.
+
+        Args:
+            task: Task description to solve
+            context: Execution context with depth and breadcrumb tracking
+
+        Yields:
+            StreamEvent objects during execution
+        """
+        try:
+            # Call planner to decide execute vs recurse
+            strategy = await self._plan_async(task, context)
+
+            # Emit plan event after planning decision
+            if strategy == "recurse":
+                yield StreamEvent.plan_event(
+                    decision="decompose",
+                    sub_tasks=None,  # Sub-tasks determined after planning
+                    task_id=context.task_id,
+                    depth=context.depth,
+                )
+            else:
+                yield StreamEvent.plan_event(
+                    decision="execute",
+                    sub_tasks=None,
+                    task_id=context.task_id,
+                    depth=context.depth,
+                )
+
+            # Execute based on strategy
+            if strategy == "recurse":
+                # Recursive case: decompose into sub-tasks
+                async for event in self._execute_decompose_streaming(task, context):
+                    yield event
+            else:
+                # Leaf case: execute directly
+                async for event in self._execute_leaf_streaming(task, context):
+                    yield event
+
+        except Exception as e:
+            # Emit error event
+            yield StreamEvent.error_event(
+                error=str(e),
+                error_type=type(e).__name__,
+                task_id=context.task_id,
+                depth=context.depth,
+            )
+            raise
+
+    async def _execute_decompose_streaming(
+        self, task: str, context: RLMContext
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Execute decomposed sub-tasks with streaming events.
+
+        Args:
+            task: Original task description
+            context: Current execution context
+
+        Yields:
+            StreamEvent objects from sub-task execution
+        """
+        # Get decomposer agent (fallback to default LLM)
+        decomposer = self.agents.get(context.active_agent or "default", self.llm)
+
+        # Get sub-tasks via decomposition
+        decompose_input: Input = {
+            "role": "user",
+            "content": f"Break down this task into 2-4 sub-tasks:\n{task}",
+        }
+
+        try:
+            async with self._semaphore:
+                decompose_result = await decomposer(
+                    [decompose_input],
+                    {
+                        "system_prompt": "You are a task decomposition expert. Break down complex tasks into simpler sub-tasks.",
+                        "temperature": 0.0,
+                    },
+                )
+
+            # Parse sub-tasks from result
+            # For simplicity, assume LLM returns numbered list
+            sub_tasks = [
+                line.strip()
+                for line in decompose_result["content"].split("\n")
+                if line.strip() and (line.strip()[0].isdigit() or line.strip().startswith("-"))
+            ]
+
+            # Execute each sub-task recursively
+            sub_results: list[str] = []
+            for i, sub_task in enumerate(sub_tasks[:4]):  # Limit to 4 sub-tasks
+                # Clean up numbered/bulleted format
+                sub_task = sub_task.lstrip("0123456789.-) \t")
+
+                # Create sub-context
+                sub_context = RLMContext(
+                    task_id=f"{context.task_id}.{i}",
+                    parent_id=context.task_id,
+                    depth=context.depth + 1,
+                    breadcrumbs=context.breadcrumbs + (task,),
+                    memory_ref=context.memory_ref,
+                    active_agent=context.active_agent,
+                )
+
+                # Recursively solve sub-task with streaming
+                async for event in self._solve_recursive_streaming(sub_task, sub_context):
+                    yield event
+
+                    # Collect result when sub-task completes
+                    if event.type == "result" and event.metadata["task_id"] == sub_context.task_id:
+                        sub_results.append(event.data["content"])
+
+            # Synthesize final result from sub-results
+            synthesis_prompt = self._create_synthesis_prompt(task, sub_results)
+
+            # Get agent for synthesis
+            agent = self.agents.get(context.active_agent or "default", self.llm)
+
+            async with self._semaphore:
+                final_output = await agent(
+                    [{"role": "user", "content": synthesis_prompt}],
+                    {
+                        "system_prompt": SYNTHESIZER_SYSTEM_PROMPT,
+                        "task_id": context.task_id,
+                        "depth": context.depth,
+                    },
+                )
+
+            # Emit result event for synthesized output
+            yield StreamEvent.result_event(
+                content=final_output["content"],
+                metadata=final_output.get("metadata", {}),
+                task_id=context.task_id,
+                depth=context.depth,
+            )
+
+        except Exception as e:
+            yield StreamEvent.error_event(
+                error=f"Decomposition/synthesis failed: {e}",
+                error_type=type(e).__name__,
+                task_id=context.task_id,
+                depth=context.depth,
+            )
+            raise ExecutionError(f"Failed to execute decomposed task: {e}") from e
+
+    async def _execute_leaf_streaming(
+        self, task: str, context: RLMContext
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Execute leaf task with streaming events.
+
+        This method executes the leaf task using the parent's _execute_leaf_async
+        (which includes tool calling support) and emits a result event.
+
+        Token-level streaming (emitting token events during LLM generation)
+        will be implemented in CAP-009.
+
+        Args:
+            task: Leaf task description
+            context: Execution context
+
+        Yields:
+            StreamEvent for result (token events in CAP-009)
+        """
+        try:
+            # Execute leaf using parent's tool calling implementation
+            output = await self._execute_leaf_async(task, context)
+
+            # Emit result event
+            yield StreamEvent.result_event(
+                content=output["content"],
+                metadata=output.get("metadata", {}),
+                task_id=context.task_id,
+                depth=context.depth,
+            )
+
+        except Exception as e:
+            yield StreamEvent.error_event(
+                error=str(e),
+                error_type=type(e).__name__,
+                task_id=context.task_id,
+                depth=context.depth,
+            )
+            raise
+
+    def _create_synthesis_prompt(
+        self, original_task: str, sub_results: list[str]
+    ) -> str:
+        """Create prompt for synthesizing sub-results into final answer.
+
+        Args:
+            original_task: Original task description
+            sub_results: List of sub-task results to synthesize
+
+        Returns:
+            Synthesis prompt for LLM
+        """
+        results_text = "\n\n".join(
+            f"Sub-task {i+1} result:\n{result}"
+            for i, result in enumerate(sub_results)
+        )
+
+        return f"""Original task: {original_task}
+
+Sub-task results:
+{results_text}
+
+Synthesize the above sub-task results into a comprehensive answer to the original task.
+Provide a coherent, well-structured response that integrates all relevant information."""
+
+
 __all__ = [
     "EventType",
     "StreamEvent",
+    "StreamingEngine",
 ]
