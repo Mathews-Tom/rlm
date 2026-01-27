@@ -190,13 +190,15 @@ class AsyncRecursiveEngine:
         # Retry logic for invalid JSON (up to 3 attempts)
         for attempt in range(3):
             try:
-                result = await planner(
-                    [planner_input],
-                    {
-                        "system_prompt": PLANNER_SYSTEM_PROMPT,
-                        "temperature": 0.0,
-                    },
-                )
+                # Apply semaphore to LLM call
+                async with self._semaphore:
+                    result = await planner(
+                        [planner_input],
+                        {
+                            "system_prompt": PLANNER_SYSTEM_PROMPT,
+                            "temperature": 0.0,
+                        },
+                    )
 
                 # Parse and validate JSON response
                 decision_data = safe_parse_json(result["content"])
@@ -253,14 +255,16 @@ class AsyncRecursiveEngine:
         }
 
         try:
-            result = await agent(
-                [exec_input],
-                {
-                    "task_id": context.task_id,
-                    "depth": context.depth,
-                    "temperature": 0.7,
-                },
-            )
+            # Apply semaphore to LLM call
+            async with self._semaphore:
+                result = await agent(
+                    [exec_input],
+                    {
+                        "task_id": context.task_id,
+                        "depth": context.depth,
+                        "temperature": 0.7,
+                    },
+                )
             return result
 
         except Exception as e:
@@ -296,13 +300,15 @@ class AsyncRecursiveEngine:
         }
 
         try:
-            decomp_result = await planner(
-                [decompose_input],
-                {
-                    "system_prompt": "You are a task decomposition expert. Break complex tasks into 2-5 independent sub-tasks.",
-                    "temperature": 0.3,
-                },
-            )
+            # Apply semaphore to LLM call
+            async with self._semaphore:
+                decomp_result = await planner(
+                    [decompose_input],
+                    {
+                        "system_prompt": "You are a task decomposition expert. Break complex tasks into 2-5 independent sub-tasks.",
+                        "temperature": 0.3,
+                    },
+                )
 
             # Parse sub-tasks from response
             decomp_data = safe_parse_json(decomp_result["content"])
@@ -327,22 +333,21 @@ class AsyncRecursiveEngine:
                 f"Failed to decompose task '{task[:60]}...': {e}"
             ) from e
 
-        # Execute sub-tasks in parallel with semaphore rate limiting
-        async def solve_with_semaphore(subtask: SubTask) -> Output:
-            """Wrapper to enforce max_concurrency via semaphore."""
-            async with self._semaphore:
-                # Create child context with agent assignment
-                assigned_agent = subtask.get("assigned_agent", None)
-                child_context = context.create_child(
-                    task_id=str(uuid.uuid4()),
-                    step_description=subtask["description"],
-                    active_agent=assigned_agent,
-                )
-                return await self.solve(subtask["description"], child_context)
+        # Execute sub-tasks in parallel (rate limiting applied at LLM call level)
+        async def solve_subtask(subtask: SubTask) -> Output:
+            """Execute single sub-task with proper context."""
+            # Create child context with agent assignment
+            assigned_agent = subtask.get("assigned_agent", None)
+            child_context = context.create_child(
+                task_id=str(uuid.uuid4()),
+                step_description=subtask["description"],
+                active_agent=assigned_agent,
+            )
+            return await self.solve(subtask["description"], child_context)
 
         # Gather all results in parallel
         results = await asyncio.gather(*[
-            solve_with_semaphore(st) for st in self._current_subtasks
+            solve_subtask(st) for st in self._current_subtasks
         ])
 
         # Synthesize results
@@ -379,13 +384,15 @@ class AsyncRecursiveEngine:
         }
 
         try:
-            synthesis = await synthesizer(
-                [synth_input],
-                {
-                    "system_prompt": SYNTHESIZER_SYSTEM_PROMPT,
-                    "temperature": 0.5,
-                },
-            )
+            # Apply semaphore to LLM call
+            async with self._semaphore:
+                synthesis = await synthesizer(
+                    [synth_input],
+                    {
+                        "system_prompt": SYNTHESIZER_SYSTEM_PROMPT,
+                        "temperature": 0.5,
+                    },
+                )
 
             if self.verbose:
                 print(f"[synthesize] Combined {len(results)} results")
@@ -396,3 +403,38 @@ class AsyncRecursiveEngine:
             raise ExecutionError(
                 f"Failed to synthesize results for task '{original_task[:60]}...': {e}"
             ) from e
+
+    def solve_sync(
+        self, task: str, context: RLMContext | None = None
+    ) -> Output:
+        """Synchronous wrapper for async solve() method.
+
+        Provides backward compatibility for synchronous code that cannot use
+        async/await. Uses asyncio.run() to execute the async solve() method
+        in a new event loop.
+
+        Args:
+            task: Task description string
+            context: Optional RLMContext for memory/state management
+                If None, creates new root context with SharedMemory
+
+        Returns:
+            Output dict with 'content', 'metadata', and 'context' keys
+
+        Raises:
+            RecursionDepthError: If max_depth exceeded
+            MaxStepsError: If max_steps exceeded
+            ExecutionError: If LLM call or synthesis fails
+
+        Example:
+            >>> engine = AsyncRecursiveEngine(llm=my_async_llm)
+            >>> # Can be called from synchronous code
+            >>> result = engine.solve_sync("Write a report")
+            >>> print(result['content'])
+
+        Note:
+            This method creates a new event loop for each call, which has
+            overhead (~10-50ms). For high-throughput applications, prefer
+            using async solve() directly within an async context.
+        """
+        return asyncio.run(self.solve(task, context))
