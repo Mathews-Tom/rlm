@@ -25,9 +25,17 @@ Example:
 from __future__ import annotations
 
 import json
+import uuid
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
+
+from rlm.exceptions import ExecutionError
+from rlm.memory import RLMContext, SharedMemory
+from rlm.prompts import SYNTHESIZER_SYSTEM_PROMPT
+from rlm.tools import ToolCallingEngine
+from rlm.types import Input
 
 EventType = Literal["plan", "token", "result", "error"]
 
@@ -277,16 +285,6 @@ class StreamEvent:
         )
 
 
-from collections.abc import AsyncGenerator
-import uuid
-
-from rlm.exceptions import ExecutionError
-from rlm.memory import RLMContext, SharedMemory
-from rlm.tools import ToolCallingEngine
-from rlm.types import Input, Output
-from rlm.prompts import SYNTHESIZER_SYSTEM_PROMPT
-
-
 class StreamingEngine(ToolCallingEngine):
     """Async recursive engine with streaming event emission.
 
@@ -344,7 +342,6 @@ class StreamingEngine(ToolCallingEngine):
             ...         case "error":
             ...             print(f"Error: {event.data['error']}")
         """
-        # Create default context if not provided
         if context is None:
             context = RLMContext(
                 task_id=str(uuid.uuid4()),
@@ -355,9 +352,6 @@ class StreamingEngine(ToolCallingEngine):
                 active_agent=None,
             )
 
-        # Execute with streaming
-        # Note: Exceptions propagate without additional error events.
-        # Error events are emitted at the source where errors occur.
         async for event in self._solve_recursive_streaming(task, context):
             yield event
 

@@ -31,8 +31,16 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable
+
+from rlm.async_engine import AsyncRecursiveEngine
+from rlm.exceptions import ExecutionError
+from rlm.memory import RLMContext
+from rlm.types import AsyncLLMCaller, Input, Output, ToolCall
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -274,18 +282,7 @@ class ToolRegistry:
         except Exception as e:
             error_msg = f"Tool '{name}' failed: {type(e).__name__}: {e}"
             logger.error(error_msg, exc_info=True)
-            # Re-raise to allow caller to handle
             raise RuntimeError(error_msg) from e
-
-
-import logging
-
-from rlm.async_engine import AsyncRecursiveEngine
-from rlm.exceptions import ExecutionError
-from rlm.memory import RLMContext
-from rlm.types import AsyncLLMCaller, Input, Output, ToolCall
-
-logger = logging.getLogger(__name__)
 
 
 class ToolCallingEngine(AsyncRecursiveEngine):

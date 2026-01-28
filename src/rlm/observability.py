@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import time
 import warnings
-from typing import Any
 
 from rlm.caching import CachedAsyncEngine
 from rlm.memory import RLMContext
