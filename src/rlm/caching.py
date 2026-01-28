@@ -15,8 +15,8 @@ from rlm.types import AsyncLLMCaller, Output
 
 # Try to import redisvl for L2 semantic caching
 try:
-    from redisvl.extensions.cache.llm import SemanticCache  # type: ignore[import-not-found]
-    from redisvl.utils.vectorize import OpenAITextVectorizer  # type: ignore[import-not-found]
+    from redisvl.extensions.cache.llm import SemanticCache
+    from redisvl.utils.vectorize import OpenAITextVectorizer
 
     REDIS_AVAILABLE = True
 except ImportError:
