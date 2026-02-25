@@ -3,11 +3,14 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from rlm.budget import UsageAccumulator, extract_usage
 from rlm.exceptions import (
+    CostLimitExceeded,
     ExecutionError,
     InvalidJSONError,
     MaxStepsError,
     RecursionDepthError,
+    TokenLimitExceeded,
 )
 from rlm.memory import RLMContext, SharedMemory
 from rlm.prompts import PLANNER_SYSTEM_PROMPT, SYNTHESIZER_SYSTEM_PROMPT
@@ -51,16 +54,23 @@ class RecursiveEngine:
     def __init__(
         self,
         llm: LLMCaller,
+        sub_model: LLMCaller | None = None,
         agents: dict[str, LLMCaller] | None = None,
         router_model: str = "planner",
         max_depth: int = 3,
         max_steps: int = 100,
+        max_prompt_tokens: int | None = None,
+        max_completion_tokens: int | None = None,
+        max_total_tokens: int | None = None,
+        max_cost: float | None = None,
         verbose: bool = False,
     ) -> None:
         """Initialize recursive engine with optional multi-agent support.
 
         Args:
             llm: Default/fallback LLM caller (must match LLMCaller protocol)
+            sub_model: Optional cheaper/faster model for leaf execution tasks.
+                If provided, used for "execute" role calls instead of llm.
             agents: Optional registry of named agents for multi-agent routing
                 Format: {"agent_name": agent_llm_caller, ...}
                 If None, runs in single-agent mode (backward compatible)
@@ -71,6 +81,14 @@ class RecursiveEngine:
                 Prevents infinite recursion by limiting tree depth.
             max_steps: Maximum total steps across all levels (default 100)
                 Prevents runaway execution in wide trees.
+            max_prompt_tokens: Hard cap on accumulated prompt tokens.
+                Raises TokenLimitExceeded when exceeded.
+            max_completion_tokens: Hard cap on accumulated completion tokens.
+                Raises TokenLimitExceeded when exceeded.
+            max_total_tokens: Hard cap on accumulated total tokens.
+                Raises TokenLimitExceeded when exceeded.
+            max_cost: Hard cap on accumulated cost in USD.
+                Raises CostLimitExceeded when exceeded.
             verbose: Enable debug logging (default False)
                 Logs planner decisions, agent routing, recursion steps
 
@@ -79,6 +97,7 @@ class RecursiveEngine:
             ValueError: If router_model not in agents registry
         """
         self.llm = llm  # Default/fallback LLM
+        self.sub_model = sub_model
         self.agents = agents.copy() if agents else {}  # Agent registry (copy for immutability)
         self.router_model = router_model
         self.max_depth = max_depth
@@ -86,6 +105,11 @@ class RecursiveEngine:
         self.verbose = verbose
         self._step_count = 0
         self._current_subtasks: list[SubTask] = []
+        self.max_prompt_tokens = max_prompt_tokens
+        self.max_completion_tokens = max_completion_tokens
+        self.max_total_tokens = max_total_tokens
+        self.max_cost = max_cost
+        self.usage = UsageAccumulator()
 
         # Validate router_model exists if using multi-agent mode
         if self.agents and self.router_model not in self.agents:
@@ -163,11 +187,51 @@ class RecursiveEngine:
         else:  # RECURSE
             return self._recurse(task, context)
 
-    def _get_agent(self, agent_name: str | None) -> LLMCaller:
+    def _get_model_for_role(self, role: str) -> LLMCaller:
+        """Select model based on execution role.
+
+        Args:
+            role: "plan", "execute", or "synthesize"
+
+        Returns:
+            sub_model for "execute" role if configured, else llm.
+        """
+        if role == "execute" and self.sub_model is not None:
+            return self.sub_model
+        return self.llm
+
+    def _check_budget(self) -> None:
+        """Raise if any budget cap is violated."""
+        u = self.usage
+        if self.max_prompt_tokens is not None and u.prompt_tokens >= self.max_prompt_tokens:
+            raise TokenLimitExceeded(
+                f"prompt_tokens={u.prompt_tokens} >= max_prompt_tokens={self.max_prompt_tokens}"
+            )
+        if self.max_completion_tokens is not None and u.completion_tokens >= self.max_completion_tokens:
+            raise TokenLimitExceeded(
+                f"completion_tokens={u.completion_tokens} >= max_completion_tokens={self.max_completion_tokens}"
+            )
+        if self.max_total_tokens is not None and u.total_tokens >= self.max_total_tokens:
+            raise TokenLimitExceeded(
+                f"total_tokens={u.total_tokens} >= max_total_tokens={self.max_total_tokens}"
+            )
+        if self.max_cost is not None and u.cost_usd >= self.max_cost:
+            raise CostLimitExceeded(
+                f"cost_usd={u.cost_usd:.6f} >= max_cost={self.max_cost:.6f}"
+            )
+
+    def get_usage(self) -> dict[str, int | float]:
+        """Return snapshot of accumulated token usage and cost."""
+        return self.usage.snapshot()
+
+    def _get_agent(self, agent_name: str | None, role: str = "plan") -> LLMCaller:
         """Get agent by name from registry with fallback.
 
         Args:
             agent_name: Name of agent to retrieve (None = use default)
+            role: Execution role — "plan", "execute", or "synthesize".
+                Used to select sub_model for "execute" role when no named
+                agent is found.
 
         Returns:
             LLMCaller instance
@@ -176,7 +240,7 @@ class RecursiveEngine:
         """
         if agent_name is None or not self.agents:
             # No agent specified or single-agent mode
-            return self.llm
+            return self._get_model_for_role(role)
 
         if agent_name in self.agents:
             return self.agents[agent_name]
@@ -189,7 +253,7 @@ class RecursiveEngine:
                 f"Available agents: {list(self.agents.keys())}"
             )
 
-        return self.llm
+        return self._get_model_for_role(role)
 
     def _decide_strategy(
         self, task: str, context: RLMContext
@@ -217,7 +281,7 @@ class RecursiveEngine:
 
         # Get router agent for planning
         router_agent = self._get_agent(
-            self.router_model if self.agents else None
+            self.router_model if self.agents else None, role="plan"
         )
 
         # Retry logic for malformed JSON (up to 3 attempts)
@@ -226,8 +290,12 @@ class RecursiveEngine:
         data: dict[str, Any] = {}  # Initialize to satisfy type checker
 
         for attempt in range(max_retries):
+            self._check_budget()
             try:
                 result = router_agent(inputs, {"mode": "planner"})
+                self.usage.add(extract_usage(result))
+            except (TokenLimitExceeded, CostLimitExceeded):
+                raise
             except Exception as e:
                 raise ExecutionError(f"LLM call failed for task: {task!r}") from e
 
@@ -353,10 +421,14 @@ class RecursiveEngine:
         ]
 
         # Get the agent assigned to this task (respects routing)
-        agent = self._get_agent(context.active_agent)
+        agent = self._get_agent(context.active_agent, role="execute")
 
+        self._check_budget()
         try:
             result = agent(inputs, {"mode": "worker"})
+            self.usage.add(extract_usage(result))
+        except (TokenLimitExceeded, CostLimitExceeded):
+            raise
         except Exception as e:
             raise ExecutionError(f"LLM call failed for task: {task!r}") from e
 
@@ -419,10 +491,14 @@ Synthesize these results into a coherent, comprehensive answer to the original t
             "synthesizer" if "synthesizer" in self.agents
             else (self.router_model if self.agents else None)
         )
-        synthesizer = self._get_agent(synthesizer_name)
+        synthesizer = self._get_agent(synthesizer_name, role="synthesize")
 
+        self._check_budget()
         try:
             result = synthesizer(inputs, {"mode": "synthesizer"})
+            self.usage.add(extract_usage(result))
+        except (TokenLimitExceeded, CostLimitExceeded):
+            raise
         except Exception as e:
             raise ExecutionError(
                 f"Synthesis failed for task: {original_task!r}"

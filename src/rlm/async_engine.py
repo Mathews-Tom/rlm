@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import uuid
 
+from rlm.budget import UsageAccumulator, extract_usage
 from rlm.exceptions import (
+    CostLimitExceeded,
     ExecutionError,
     InvalidJSONError,
     MaxStepsError,
     RecursionDepthError,
+    TokenLimitExceeded,
 )
 from rlm.memory import RLMContext, SharedMemory
 from rlm.prompts import PLANNER_SYSTEM_PROMPT, SYNTHESIZER_SYSTEM_PROMPT
@@ -55,17 +58,24 @@ class AsyncRecursiveEngine:
     def __init__(
         self,
         llm: AsyncLLMCaller,
+        sub_model: AsyncLLMCaller | None = None,
         agents: dict[str, AsyncLLMCaller] | None = None,
         router_model: str = "planner",
         max_depth: int = 3,
         max_steps: int = 100,
         max_concurrency: int = 10,
+        max_prompt_tokens: int | None = None,
+        max_completion_tokens: int | None = None,
+        max_total_tokens: int | None = None,
+        max_cost: float | None = None,
         verbose: bool = False,
     ) -> None:
         """Initialize async recursive engine with parallel execution support.
 
         Args:
             llm: Default/fallback async LLM caller (must match AsyncLLMCaller protocol)
+            sub_model: Optional cheaper/faster async model for leaf execution tasks.
+                If provided, used for "execute" role calls instead of llm.
             agents: Optional registry of named agents for multi-agent routing
                 Format: {"agent_name": agent_llm_caller, ...}
                 If None, runs in single-agent mode (backward compatible)
@@ -78,6 +88,14 @@ class AsyncRecursiveEngine:
                 Prevents runaway execution in wide trees.
             max_concurrency: Maximum concurrent sub-tasks (default 10)
                 Semaphore-based rate limiting to prevent resource exhaustion.
+            max_prompt_tokens: Hard cap on accumulated prompt tokens.
+                Raises TokenLimitExceeded when exceeded.
+            max_completion_tokens: Hard cap on accumulated completion tokens.
+                Raises TokenLimitExceeded when exceeded.
+            max_total_tokens: Hard cap on accumulated total tokens.
+                Raises TokenLimitExceeded when exceeded.
+            max_cost: Hard cap on accumulated cost in USD.
+                Raises CostLimitExceeded when exceeded.
             verbose: Enable debug logging (default False)
                 Logs planner decisions, agent routing, recursion steps
 
@@ -86,6 +104,7 @@ class AsyncRecursiveEngine:
             ValueError: If router_model not in agents registry
         """
         self.llm = llm
+        self.sub_model = sub_model
         self.agents = agents.copy() if agents else {}
         self.router_model = router_model
         self.max_depth = max_depth
@@ -95,6 +114,11 @@ class AsyncRecursiveEngine:
         self._step_count = 0
         self._current_subtasks: list[SubTask] = []
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self.max_prompt_tokens = max_prompt_tokens
+        self.max_completion_tokens = max_completion_tokens
+        self.max_total_tokens = max_total_tokens
+        self.max_cost = max_cost
+        self.usage = UsageAccumulator()
 
         # Validate router_model exists if using multi-agent mode
         if self.agents and self.router_model not in self.agents:
@@ -102,6 +126,36 @@ class AsyncRecursiveEngine:
                 f"router_model '{self.router_model}' not found in agents registry. "
                 f"Available agents: {list(self.agents.keys())}"
             )
+
+    def _get_model_for_role(self, role: str) -> AsyncLLMCaller:
+        """Select async model based on execution role."""
+        if role == "execute" and self.sub_model is not None:
+            return self.sub_model
+        return self.llm
+
+    async def _check_budget_async(self) -> None:
+        """Async budget enforcement."""
+        u = self.usage
+        if self.max_prompt_tokens is not None and u.prompt_tokens >= self.max_prompt_tokens:
+            raise TokenLimitExceeded(
+                f"prompt_tokens={u.prompt_tokens} >= max_prompt_tokens={self.max_prompt_tokens}"
+            )
+        if self.max_completion_tokens is not None and u.completion_tokens >= self.max_completion_tokens:
+            raise TokenLimitExceeded(
+                f"completion_tokens={u.completion_tokens} >= max_completion_tokens={self.max_completion_tokens}"
+            )
+        if self.max_total_tokens is not None and u.total_tokens >= self.max_total_tokens:
+            raise TokenLimitExceeded(
+                f"total_tokens={u.total_tokens} >= max_total_tokens={self.max_total_tokens}"
+            )
+        if self.max_cost is not None and u.cost_usd >= self.max_cost:
+            raise CostLimitExceeded(
+                f"cost_usd={u.cost_usd:.6f} >= max_cost={self.max_cost:.6f}"
+            )
+
+    def get_usage(self) -> dict[str, int | float]:
+        """Return snapshot of accumulated token usage and cost."""
+        return self.usage.snapshot()
 
     async def solve(
         self, task: str, context: RLMContext | None = None
@@ -179,7 +233,7 @@ class AsyncRecursiveEngine:
             ExecutionError: If planner LLM call fails
         """
         # Get planner agent (fallback to default LLM)
-        planner = self.agents.get(self.router_model, self.llm)
+        planner = self.agents.get(self.router_model, self._get_model_for_role("plan"))
 
         # Build planner input
         planner_input: Input = {
@@ -189,6 +243,7 @@ class AsyncRecursiveEngine:
 
         # Retry logic for invalid JSON (up to 3 attempts)
         for attempt in range(3):
+            await self._check_budget_async()
             try:
                 # Apply semaphore to LLM call
                 async with self._semaphore:
@@ -199,6 +254,7 @@ class AsyncRecursiveEngine:
                             "temperature": 0.0,
                         },
                     )
+                await self.usage.add_async(extract_usage(result))
 
                 # Parse and validate JSON response
                 decision_data = safe_parse_json(result["content"])
@@ -243,7 +299,7 @@ class AsyncRecursiveEngine:
         """
         # Route to agent based on active_agent in context, otherwise use default
         agent_name = context.active_agent or "default"
-        agent = self.agents.get(agent_name, self.llm)
+        agent = self.agents.get(agent_name, self._get_model_for_role("execute"))
 
         if self.verbose:
             print(f"[execute] agent={agent_name}, task={task[:60]}...")
@@ -254,6 +310,7 @@ class AsyncRecursiveEngine:
             "content": task,
         }
 
+        await self._check_budget_async()
         try:
             # Apply semaphore to LLM call
             async with self._semaphore:
@@ -265,8 +322,11 @@ class AsyncRecursiveEngine:
                         "temperature": 0.7,
                     },
                 )
+            await self.usage.add_async(extract_usage(result))
             return result
 
+        except (TokenLimitExceeded, CostLimitExceeded):
+            raise
         except Exception as e:
             raise ExecutionError(
                 f"Failed to execute task '{task[:60]}...' with agent '{agent_name}': {e}"
@@ -291,7 +351,7 @@ class AsyncRecursiveEngine:
             ExecutionError: If decomposition or synthesis fails
         """
         # Get planner agent for decomposition
-        planner = self.agents.get(self.router_model, self.llm)
+        planner = self.agents.get(self.router_model, self._get_model_for_role("plan"))
 
         # Request task decomposition
         decompose_input: Input = {
@@ -299,6 +359,7 @@ class AsyncRecursiveEngine:
             "content": f"Decompose this task into sub-tasks:\n{task}",
         }
 
+        await self._check_budget_async()
         try:
             # Apply semaphore to LLM call
             async with self._semaphore:
@@ -309,6 +370,7 @@ class AsyncRecursiveEngine:
                         "temperature": 0.3,
                     },
                 )
+            await self.usage.add_async(extract_usage(decomp_result))
 
             # Parse sub-tasks from response
             decomp_data = safe_parse_json(decomp_result["content"])
@@ -370,7 +432,7 @@ class AsyncRecursiveEngine:
             ExecutionError: If synthesis LLM call fails
         """
         # Get synthesizer agent (fallback to default)
-        synthesizer = self.agents.get("synthesizer", self.llm)
+        synthesizer = self.agents.get("synthesizer", self._get_model_for_role("synthesize"))
 
         # Build synthesis prompt
         results_text = "\n\n".join([
@@ -383,6 +445,7 @@ class AsyncRecursiveEngine:
             "content": f"Original task: {original_task}\n\nSub-task results:\n{results_text}\n\nSynthesize into final answer.",
         }
 
+        await self._check_budget_async()
         try:
             # Apply semaphore to LLM call
             async with self._semaphore:
@@ -393,12 +456,15 @@ class AsyncRecursiveEngine:
                         "temperature": 0.5,
                     },
                 )
+            await self.usage.add_async(extract_usage(synthesis))
 
             if self.verbose:
                 print(f"[synthesize] Combined {len(results)} results")
 
             return synthesis
 
+        except (TokenLimitExceeded, CostLimitExceeded):
+            raise
         except Exception as e:
             raise ExecutionError(
                 f"Failed to synthesize results for task '{original_task[:60]}...': {e}"
