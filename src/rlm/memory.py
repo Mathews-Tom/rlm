@@ -34,6 +34,24 @@ class SharedMemory:
         self._store[doc_id] = content
         return doc_id
 
+    def store_named(self, name: str, content: str) -> None:
+        """Store content under a specific named key.
+
+        Args:
+            name: Key to store content under (must start with '__')
+            content: Content to store
+
+        Raises:
+            ValueError: If name does not start with '__'
+        """
+        if not name.startswith("__"):
+            raise ValueError("Named keys must start with '__' to avoid collision with ref:: IDs")
+        self._store[name] = content
+
+    def resolve_named(self, name: str) -> str | None:
+        """Retrieve content by named key, None if not found."""
+        return self._store.get(name)
+
     def resolve(self, doc_id: str) -> str:
         """Retrieve content by reference ID.
 
