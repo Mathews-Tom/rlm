@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from rlm.budget import extract_usage
 from rlm.exceptions import ExecutionError
 from rlm.memory import RLMContext, SharedMemory
 from rlm.prompts import SYNTHESIZER_SYSTEM_PROMPT
@@ -418,7 +419,7 @@ class StreamingEngine(ToolCallingEngine):
             StreamEvent objects from sub-task execution
         """
         # Get decomposer agent (fallback to default LLM)
-        decomposer = self.agents.get(context.active_agent or "default", self.llm)
+        decomposer = self.agents.get(context.active_agent or "default", self._get_model_for_role("plan"))
 
         # Get sub-tasks via decomposition
         decompose_input: Input = {
@@ -427,6 +428,7 @@ class StreamingEngine(ToolCallingEngine):
         }
 
         try:
+            await self._check_budget_async()
             async with self._semaphore:
                 decompose_result = await decomposer(
                     [decompose_input],
@@ -435,6 +437,7 @@ class StreamingEngine(ToolCallingEngine):
                         "temperature": 0.0,
                     },
                 )
+            await self.usage.add_async(extract_usage(decompose_result))
 
             # Parse sub-tasks from result
             # For simplicity, assume LLM returns numbered list
@@ -472,8 +475,9 @@ class StreamingEngine(ToolCallingEngine):
             synthesis_prompt = self._create_synthesis_prompt(task, sub_results)
 
             # Get agent for synthesis
-            agent = self.agents.get(context.active_agent or "default", self.llm)
+            agent = self.agents.get(context.active_agent or "default", self._get_model_for_role("synthesize"))
 
+            await self._check_budget_async()
             async with self._semaphore:
                 final_output = await agent(
                     [{"role": "user", "content": synthesis_prompt}],
@@ -483,6 +487,7 @@ class StreamingEngine(ToolCallingEngine):
                         "depth": context.depth,
                     },
                 )
+            await self.usage.add_async(extract_usage(final_output))
 
             # Emit result event for synthesized output
             yield StreamEvent.result_event(
@@ -530,7 +535,7 @@ class StreamingEngine(ToolCallingEngine):
         """
         try:
             # Get the agent for this task
-            agent = self.agents.get(context.active_agent or "default", self.llm)
+            agent = self.agents.get(context.active_agent or "default", self._get_model_for_role("execute"))
 
             # Check if agent supports streaming
             has_streaming = hasattr(agent, "stream") and callable(

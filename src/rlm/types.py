@@ -6,6 +6,16 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable
 
 
+class UsageInfo(TypedDict, total=False):
+    """Token usage reported by an LLM backend."""
+
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    cached_tokens: int
+    cost_usd: float
+
+
 # OpenResponses Protocol Types
 class Input(TypedDict):
     """OpenResponses standard input message.
@@ -51,6 +61,7 @@ class Output(TypedDict):
 
     content: str
     metadata: dict[str, Any]
+    usage: NotRequired[UsageInfo]  # Optional, token usage from backend
     sub_results: NotRequired[list[Output]]  # Optional, for nested results
     tool_calls: NotRequired[list[ToolCall]]  # Optional, for tool calling
 
@@ -182,6 +193,19 @@ class AsyncToolCaller(Protocol):
         ...
 
 
+# REPL Execution Types
+class REPLIteration(TypedDict):
+    """Record of a single REPL iteration (code + output).
+
+    Stored in Output metadata for observability.
+    """
+
+    code: str
+    output: str
+    error: str | None
+    iteration: int
+
+
 # Internal Control Flow Types
 class SubTask(TypedDict):
     """Sub-task with agent assignment for multi-agent routing.
@@ -228,6 +252,7 @@ class TraceObject(TypedDict):
 
 
 __all__ = [
+    "UsageInfo",
     "Input",
     "Item",
     "Output",
@@ -236,6 +261,7 @@ __all__ = [
     "AsyncLLMCaller",
     "AsyncStreamingLLMCaller",
     "AsyncToolCaller",
+    "REPLIteration",
     "SubTask",
     "PlannerDecision",
     "TraceObject",

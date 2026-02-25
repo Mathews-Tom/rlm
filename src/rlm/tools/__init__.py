@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from rlm.async_engine import AsyncRecursiveEngine
+from rlm.budget import extract_usage
 from rlm.exceptions import ExecutionError
 from rlm.memory import RLMContext
 from rlm.types import AsyncLLMCaller, Input, Output, ToolCall
@@ -318,11 +319,16 @@ class ToolCallingEngine(AsyncRecursiveEngine):
         self,
         llm: AsyncLLMCaller,
         tool_registry: ToolRegistry,
+        sub_model: AsyncLLMCaller | None = None,
         agents: dict[str, AsyncLLMCaller] | None = None,
         router_model: str = "planner",
         max_depth: int = 3,
         max_steps: int = 100,
         max_concurrency: int = 10,
+        max_prompt_tokens: int | None = None,
+        max_completion_tokens: int | None = None,
+        max_total_tokens: int | None = None,
+        max_cost: float | None = None,
         tool_timeout: float = 30.0,
         max_tool_retries: int = 2,
         max_tool_iterations: int = 5,
@@ -333,11 +339,16 @@ class ToolCallingEngine(AsyncRecursiveEngine):
         Args:
             llm: Async LLM caller that supports tool calling
             tool_registry: ToolRegistry instance with registered tools
+            sub_model: Optional sub-model for execute-role tasks (two-tier forwarding)
             agents: Optional multi-agent registry
             router_model: Agent name for planning decisions
             max_depth: Maximum recursion depth
             max_steps: Maximum total execution steps
             max_concurrency: Max concurrent tasks
+            max_prompt_tokens: Optional prompt token budget limit
+            max_completion_tokens: Optional completion token budget limit
+            max_total_tokens: Optional total token budget limit
+            max_cost: Optional cost budget limit in dollars
             tool_timeout: Timeout for tool execution in seconds (default: 30.0)
             max_tool_retries: Max retries for transient tool failures (default: 2)
             max_tool_iterations: Max iterations in tool calling loop (default: 5)
@@ -346,11 +357,16 @@ class ToolCallingEngine(AsyncRecursiveEngine):
         """
         super().__init__(
             llm=llm,
+            sub_model=sub_model,
             agents=agents,
             router_model=router_model,
             max_depth=max_depth,
             max_steps=max_steps,
             max_concurrency=max_concurrency,
+            max_prompt_tokens=max_prompt_tokens,
+            max_completion_tokens=max_completion_tokens,
+            max_total_tokens=max_total_tokens,
+            max_cost=max_cost,
             verbose=verbose,
         )
         self.tool_registry = tool_registry
@@ -464,7 +480,7 @@ class ToolCallingEngine(AsyncRecursiveEngine):
             logger.info(f"[Depth {context.depth}] Executing leaf task with tools: {task}")
 
         # Get the agent for this task
-        agent = self.agents.get(context.active_agent or "default", self.llm)
+        agent = self.agents.get(context.active_agent or "default", self._get_model_for_role("execute"))
 
         # Build conversation history
         inputs: list[Input] = [
@@ -488,8 +504,10 @@ class ToolCallingEngine(AsyncRecursiveEngine):
 
             # Call LLM
             try:
+                await self._check_budget_async()
                 async with self._semaphore:
                     result = await agent(inputs, {"mode": "worker"})
+                await self.usage.add_async(extract_usage(result))
             except Exception as e:
                 logger.error(f"LLM call failed: {e}", exc_info=True)
                 raise ExecutionError(f"LLM call failed for task: {task!r}") from e

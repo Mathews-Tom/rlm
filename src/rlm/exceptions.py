@@ -21,10 +21,35 @@ class ExecutionError(RLMError):
     """Raised when LLM call fails."""
 
 
+class BudgetExceeded(RLMError):
+    """Base class for budget cap violations."""
+
+
+class TokenLimitExceeded(BudgetExceeded):
+    """Raised when a token limit (prompt, completion, or total) is exceeded."""
+
+
+class CostLimitExceeded(BudgetExceeded):
+    """Raised when the cost ceiling (max_cost USD) is exceeded."""
+
+
+class CodeExecutionError(RLMError):
+    """Raised when REPL code execution fails or times out."""
+
+
+class MaxREPLIterationsError(RLMError):
+    """Raised when REPL loop exceeds max_repl_iterations."""
+
+
 __all__ = [
     "RLMError",
     "RecursionDepthError",
     "MaxStepsError",
     "InvalidJSONError",
     "ExecutionError",
+    "BudgetExceeded",
+    "TokenLimitExceeded",
+    "CostLimitExceeded",
+    "CodeExecutionError",
+    "MaxREPLIterationsError",
 ]
