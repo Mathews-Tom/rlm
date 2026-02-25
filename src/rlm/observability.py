@@ -74,11 +74,16 @@ class InstrumentedAsyncEngine(CachedAsyncEngine):
     def __init__(
         self,
         llm: AsyncLLMCaller,
+        sub_model: AsyncLLMCaller | None = None,
         agents: dict[str, AsyncLLMCaller] | None = None,
         router_model: str = "planner",
         max_depth: int = 3,
         max_steps: int = 100,
         max_concurrency: int = 10,
+        max_prompt_tokens: int | None = None,
+        max_completion_tokens: int | None = None,
+        max_total_tokens: int | None = None,
+        max_cost: float | None = None,
         l1_size: int = 1000,
         redis_url: str | None = None,
         cache_threshold: float = 0.85,
@@ -93,11 +98,16 @@ class InstrumentedAsyncEngine(CachedAsyncEngine):
 
         Args:
             llm: Default/fallback async LLM caller
+            sub_model: Optional sub-model for execute-role tasks (two-tier forwarding)
             agents: Optional registry of named agents for multi-agent routing
             router_model: Name of agent to use for planning decisions (default "planner")
             max_depth: Maximum recursion depth (default 3)
             max_steps: Maximum total steps across all levels (default 100)
             max_concurrency: Maximum concurrent sub-tasks (default 10)
+            max_prompt_tokens: Optional prompt token budget limit
+            max_completion_tokens: Optional completion token budget limit
+            max_total_tokens: Optional total token budget limit
+            max_cost: Optional cost budget limit in dollars
             l1_size: Maximum L1 cache entries (default 1000)
             redis_url: Optional Redis connection URL for L2 cache (default None)
             cache_threshold: Semantic similarity threshold for L2 cache (default 0.85)
@@ -118,11 +128,16 @@ class InstrumentedAsyncEngine(CachedAsyncEngine):
         """
         super().__init__(
             llm=llm,
+            sub_model=sub_model,
             agents=agents,
             router_model=router_model,
             max_depth=max_depth,
             max_steps=max_steps,
             max_concurrency=max_concurrency,
+            max_prompt_tokens=max_prompt_tokens,
+            max_completion_tokens=max_completion_tokens,
+            max_total_tokens=max_total_tokens,
+            max_cost=max_cost,
             l1_size=l1_size,
             redis_url=redis_url,
             cache_threshold=cache_threshold,
